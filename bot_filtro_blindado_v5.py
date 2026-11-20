@@ -8,10 +8,11 @@
 
 Horários CET (Europe/Madrid = Europe/Prague no inverno e no horário de verão da UE;
 somente Czech Liga Pro — 24 h, madrugada inclusive):
-  ENTRADA (pré-jogo): fixa às :25 (bloco das :30) e às :55 (bloco das :00),
-      uma linha por jogo: "HH:MM — A vs B | Entrada: Alvo @ Odd".
-      Sem sinal: "HH:MM — Sem entrada". Score, gap e Histórico/H2H ficam no log.
-      Bloco sem jogos da liga não gera mensagem.
+  ENTRADA (pré-jogo): às :25 (bloco das :30) e às :55 (bloco das :00).
+      O ciclo pode acordar até 4 min depois e ainda manda a mensagem uma vez.
+      Uma linha por jogo: "HH:MM — A vs B | Entrada: Alvo @ Odd".
+      Sem sinal, ou sem jogo na grade: "HH:MM — Sem entrada".
+      Score, gap e Histórico/H2H ficam no log.
 
 Filtro rígido por FORMA NA JANELA (últimas 4 h; o alvo é quem tem o melhor
   score_forma, não o favorito da casa):
@@ -160,9 +161,11 @@ def estimar_inicio(fim: datetime, sets_a: int, sets_b: int) -> datetime:
 
 def peso_sets(sets_favor: int, sets_contra: int) -> float:
     return float(PESOS_FORMA.get((int(sets_favor), int(sets_contra)), 0.0))
-# O alerta é o minuto :25 ou :55 (5 min antes). A folga abaixo só valida o cache.
-ENTRADA_ANTES_MAX_S = 8 * 60
-ENTRADA_ANTES_MIN_S = 2 * 60
+# O alerta é :25 (bloco :30) e :55 (bloco :00). A folga cobre um ciclo de ~40 s
+# que acorde depois do minuto exato. ENTRADA_ANTES_* só descreve essa folga.
+ALERTA_FOLGA_MIN = 4
+ENTRADA_ANTES_MAX_S = 5 * 60
+ENTRADA_ANTES_MIN_S = 60
 # Horário anterior: "rigido" bloqueia sempre; "sets" só se o jogo anterior teve 4 ou 5 sets.
 HORARIO_ANTERIOR = "rigido"
 
@@ -1225,19 +1228,41 @@ def chave_bloco(kickoff: datetime) -> str:
 def _delta_inicio(kickoff: datetime, now: datetime) -> float:
     return (_kickoff_local(kickoff) - now.astimezone(TZ)).total_seconds()
 
+def slot_alerta_atual(now: Optional[datetime] = None) -> Optional[str]:
+    """Bloco a avisar agora, em horário de Praga.
+
+    :25–:29 avisa o apito das :30. :55–:59 avisa o das :00 da hora seguinte.
+    A folga existe porque o ciclo acorda a cada ~40 s e pode passar do minuto exato.
+    """
+    agora = (now or agora_cet()).astimezone(TZ)
+    if 25 <= agora.minute <= 25 + ALERTA_FOLGA_MIN:
+        alvo = agora.replace(minute=30, second=0, microsecond=0)
+    elif 55 <= agora.minute <= 55 + ALERTA_FOLGA_MIN:
+        alvo = (agora.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1))
+    else:
+        return None
+    return alvo.strftime("%Y-%m-%d|%H:%M")
+
 def dentro_da_antecedencia(kickoff: datetime, now: datetime) -> bool:
-    """Alerta fixo: :25 para o bloco das :30 e :55 para o bloco das :00."""
+    """O apito das :00/:30 está na janela do alerta (:55–:59 ou :25–:29)."""
+    slot = slot_alerta_atual(now)
+    if not slot or kickoff is None:
+        return False
     ko = _kickoff_local(kickoff)
-    agora = now.astimezone(TZ)
     if ko.minute not in (0, 30):
         return False
-    aviso = ko - timedelta(minutes=5)
-    return (agora.year, agora.month, agora.day, agora.hour, agora.minute) == (
-        aviso.year, aviso.month, aviso.day, aviso.hour, aviso.minute)
+    return chave_bloco(kickoff) == slot
 
 def dentro_do_fallback(kickoff: datetime, now: datetime) -> bool:
-    """O alerta não sai fora de :25 e :55."""
+    """O alerta não sai fora da janela das :25 e :55."""
     return False
+
+def _jogo_ainda_vai_comecar(o: "OddsMatch", now: Optional[datetime] = None) -> bool:
+    """Apito ainda à frente. Um in_play adiantado não esconde o jogo do bloco."""
+    if o is None or o.kickoff is None:
+        return False
+    agora = (now or agora_cet()).astimezone(TZ)
+    return _kickoff_local(o.kickoff) > agora
 
 def jogos_comecando_em(jogos: List[OddsMatch], now: datetime, segundos: float) -> bool:
     for o in jogos or []:
@@ -1277,13 +1302,13 @@ def fonte_entrada(fixtures: List[OddsMatch], odds_list: List[OddsMatch]) -> List
     """
     por_par: Dict[str, OddsMatch] = {}
     for o in odds_list or []:
-        if o.in_play:
+        if o.in_play and not _jogo_ainda_vai_comecar(o):
             continue
         por_par[chave_par(o.home, o.away)] = o
     out: List[OddsMatch] = []
     vistos = set()
     for f in fixtures or []:
-        if f.in_play:
+        if f.in_play and not _jogo_ainda_vai_comecar(f):
             continue
         k = chave_par(f.home, f.away)
         o = por_par.get(k)
@@ -1301,10 +1326,10 @@ def fonte_entrada(fixtures: List[OddsMatch], odds_list: List[OddsMatch]) -> List
             out.append(o)
     return out
 
-def _dedupe_pre(jogos: List[OddsMatch]) -> List[OddsMatch]:
+def _dedupe_pre(jogos: List[OddsMatch], now: Optional[datetime] = None) -> List[OddsMatch]:
     out, vistos = [], set()
     for o in jogos:
-        if o.in_play or o.kickoff is None:
+        if o.kickoff is None or not _jogo_ainda_vai_comecar(o, now):
             continue
         k = chave_par(o.home, o.away)
         if k in vistos:
@@ -1322,26 +1347,36 @@ def instante_bloco(slot_key: str) -> datetime:
     hh, mm = hm.split(":")
     return TZ.localize(datetime.strptime(dia, "%Y-%m-%d").replace(hour=int(hh), minute=int(mm)))
 
-def confrontos_do_bloco(odds_list: List[OddsMatch], slot_key: str) -> List[OddsMatch]:
-    """Pré-jogo cujo início é o minuto do slot ('YYYY-MM-DD|HH:MM'). Sem horário, fica de fora."""
+def confrontos_do_bloco(odds_list: List[OddsMatch], slot_key: str,
+                        incluir_ao_vivo: bool = False) -> List[OddsMatch]:
+    """Jogos do apito do slot que ainda não começaram. Sem horário, ficam de fora.
+
+    No alerta, incluir_ao_vivo=True: a casa às vezes marca in_play minutos antes do apito.
+    """
     alvo = _alvo_bloco(slot_key)
-    escolhidos = [o for o in odds_list or []
-                  if not o.in_play and o.kickoff is not None and chave_bloco(o.kickoff) == alvo]
-    return _dedupe_pre(escolhidos)
+    agora = agora_cet()
+    escolhidos = []
+    for o in odds_list or []:
+        if not _jogo_ainda_vai_comecar(o, agora) or chave_bloco(o.kickoff) != alvo:
+            continue
+        if o.in_play and not incluir_ao_vivo:
+            continue
+        escolhidos.append(o)
+    return _dedupe_pre(escolhidos, agora)
 
 def confrontos_rodada2(odds_list: List[OddsMatch], slot_key: str) -> List[OddsMatch]:
     """O slot é o minuto de início do bloco, não mais a hora cheia seguinte."""
     return confrontos_do_bloco(odds_list, slot_key)
 
 def blocos_devidos(jogos: List[OddsMatch], now: Optional[datetime] = None) -> List[Tuple[str, List[OddsMatch]]]:
-    """Blocos cujo apito está entre 8 e 2 minutos à frente. Independente do modo."""
+    """Bloco das :00 ou :30 que está na janela do alerta. Independente do modo."""
     now = now or agora_cet()
     grupos: Dict[str, List[OddsMatch]] = {}
     for o in jogos or []:
-        if o.in_play or o.kickoff is None or not dentro_da_antecedencia(o.kickoff, now):
+        if not _jogo_ainda_vai_comecar(o, now) or not dentro_da_antecedencia(o.kickoff, now):
             continue
         grupos.setdefault(chave_bloco(o.kickoff), []).append(o)
-    return [(k, _dedupe_pre(v)) for k, v in sorted(grupos.items())]
+    return [(k, _dedupe_pre(v, now)) for k, v in sorted(grupos.items())]
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SCOREMONDO (placar)
@@ -2119,17 +2154,25 @@ def processar_entrada(slot_key: str, hist: Historico, sinais: CacheSet, entradas
                       forma: Optional[FormaDia] = None,
                       historico_anterior: Optional[HistoricoSportsAPI365] = None,
                       agenda: Optional[List[OddsMatch]] = None,
-                      livro: Optional["LivroEntradas"] = None) -> bool:
+                      livro: Optional["LivroEntradas"] = None,
+                      odds_frescas: bool = True) -> bool:
     if entradas.has(slot_key):
         return False
-    confrontos = confrontos_do_bloco(odds_list, slot_key)
+    alvo = _alvo_bloco(slot_key)
+    confrontos = confrontos_do_bloco(odds_list, slot_key, incluir_ao_vivo=True)
     if not confrontos:
-        log.info("[ENTRADA %s] 0 jogos avaliados, 0 aprovados", _alvo_bloco(slot_key))
-        return False
+        porque = "sem odds frescas / 0 jogos na grade" if not odds_frescas else "0 jogos na grade"
+        log.info("[ENTRADA %s] 0 jogos avaliados, 0 aprovados (%s)", alvo, porque)
+        if not tg.send(_texto_sem_entrada(alvo.split("|", 1)[1])):
+            log.error(f"[ENTRADA {slot_key}] falha ao enviar — tenta de novo no próximo ciclo")
+            return False
+        entradas.add(slot_key)
+        return True
     textos, verdes, definitivos = montar_mensagem_entrada(
         slot_key, confrontos, hist, odds_list, forma, historico_anterior, agenda)
-    log.info("[ENTRADA %s] %s jogos avaliados, %s aprovados",
-             _alvo_bloco(slot_key), len(confrontos), len(verdes))
+    extra = "" if odds_frescas else " (sem odds frescas)"
+    log.info("[ENTRADA %s] %s jogos avaliados, %s aprovados%s",
+             alvo, len(confrontos), len(verdes), extra)
     if not textos:
         log.error(f"[ENTRADA {slot_key}] falha ao enviar — tenta de novo no próximo ciclo")
         return False
@@ -2153,6 +2196,25 @@ def processar_entrada(slot_key: str, hist: Historico, sinais: CacheSet, entradas
             gap = item[2] if len(item) > 2 else None
             livro.registrar(o.home, o.away, fav, o.kickoff, _odd_do_jogador(fav, o), gap)
     return True
+
+def despachar_alerta(agora: datetime, fonte: List[OddsMatch], entradas: CacheSet,
+                     tentativas: Dict[str, float], tg: Telegram, hist: Historico,
+                     sinais: CacheSet, apostas: "Apostas" = None,
+                     forma: Optional[FormaDia] = None,
+                     historico_anterior: Optional[HistoricoSportsAPI365] = None,
+                     agenda: Optional[List[OddsMatch]] = None,
+                     livro: Optional["LivroEntradas"] = None,
+                     odds_frescas: bool = True) -> bool:
+    """Uma vez por bloco, na janela :25–:29 ou :55–:59. Vale depois de reiniciar."""
+    slot = slot_alerta_atual(agora)
+    if not slot or entradas.has(slot):
+        return False
+    if time.time() - tentativas.get(slot, 0.0) < 30:
+        return False
+    tentativas[slot] = time.time()
+    return processar_entrada(
+        slot, hist, sinais, entradas, tg, fonte, apostas, forma,
+        historico_anterior, agenda, livro, odds_frescas=odds_frescas)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PROCESSAMENTO AO VIVO (R1 grava / R2 fallback)
@@ -3223,14 +3285,10 @@ def main():
             agenda_vista = coletar_agenda(list(fixtures_cache) + list(odds_now or []), agora_local, agenda_vista)
             if blocos_devidos(fonte, agora_local):
                 registrar_resultados_r1(_trazer_resultados(scoremondo, forma), hist, finished, odds_now)
-            for slot, _jogos in blocos_devidos(fonte, agora_local):
-                if entradas.has(slot):
-                    continue
-                if time.time() - tentativas_entrada.get(slot, 0.0) < 30:
-                    continue
-                tentativas_entrada[slot] = time.time()
-                processar_entrada(slot, hist, sinais, entradas, tg, fonte, apostas, forma,
-                                  historico_anterior, agenda_vista, livro)
+            frescas = (odds_cache.quando is not None
+                       and time.time() - odds_cache.quando <= ODDS_CACHE_TTL_S)
+            despachar_alerta(agora_local, fonte, entradas, tentativas_entrada, tg, hist, sinais,
+                             apostas, forma, historico_anterior, agenda_vista, livro, frescas)
 
             agora_ts = time.time()
             vivos_terminados: List[Resultado] = []

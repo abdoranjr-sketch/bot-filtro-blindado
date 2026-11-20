@@ -417,7 +417,7 @@ for slot, chamadas in blocos.items():
         idade = (dt - anteriores[-1]).total_seconds()
         check(0 <= idade <= 20 * 60, (slot, dt, idade, modo))
         delta = (b.instante_bloco(slot) - dt).total_seconds()
-        check(b.ENTRADA_ANTES_MIN_S <= delta <= b.ENTRADA_ANTES_MAX_S, (slot, dt, delta, modo))
+        check(0 < delta <= b.ENTRADA_ANTES_MAX_S, (slot, dt, delta, modo))
 
 logs_entrada = [m for _, m in cap_dia.rows if m.startswith("[ENTRADA ") and "jogos avaliados" in m]
 check(logs_entrada, "log de entrada")
