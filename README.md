@@ -10,21 +10,32 @@ e comandos (/placar /semana /mes /entradas /ajuda /id) continuam iguais.
 Fontes: ScoreMondo (jogos, placar ao vivo e resultados — páginas públicas) e MoviOdds
 (odds e resultados finalizados). Outras ligas são ignoradas.
 
-## Filtro rígido — forma do dia
+## Filtro rígido — forma na janela móvel
 
-O favorito é só a odd pré-jogo **deste** jogo (máximo 1.65). Entram todos os jogos já
-finalizados de cada jogador desde 00:00 CET (Europe/Madrid, o fuso do dia no bot).
-Para sinalizar, as condições valem juntas:
+O alvo é quem tem o **melhor `score_forma`**, não o favorito da casa. A conta usa só
+os últimos 2 ou 3 jogos finalizados nas **últimas 4 horas** (pesos: 3-0 = +3,0,
+3-1 = +2,0, 3-2 = +0,5, 2-3 = −0,5, 1-3 = −2,0, 0-3 = −3,0). `jogos_hoje` conta os
+finalizados nas últimas 3 horas. Para sinalizar, nesta ordem:
 
-1. O favorito não perdeu hoje. Qualquer derrota descarta a odd (`❌ favorito … já perdeu hoje`).
-2. Pelo menos 2 vitórias limpas (3-0 ou 3-1). Uma vitória 3-2 é alerta amarelo e bloqueia.
-   Com só 1 vitória limpa, a entrada espera (`⏳ … precisa de 2`).
-3. O adversário tem pelo menos uma derrota feia hoje (0-3 ou 1-3).
-4. Se ninguém passar, o bloco diz `Entrada: NENHUMA` e lista o motivo de cada jogo.
+1. Os dois jogadores têm pelo menos 1 jogo finalizado nas últimas 3 h. Senão: sem dados do dia.
+2. A odd do alvo está entre 1,25 e 1,85 (inclusive).
+3. O alvo não perdeu o último jogo e tem pelo menos 2 vitórias limpas seguidas (3-0 ou 3-1).
+4. O último jogo do alvo não foi 5 sets terminado há menos de 45 minutos.
+5. O alvo não começou outro jogo nos 45 minutos anteriores a este apito (horário anterior,
+   por exemplo 17:30 e agora 18:00). Vale o início gravado e a grade, mesmo sem placar.
+6. Bônus de adversário comum nas últimas 3 h: alvo venceu C por 3-0/3-1 e o adversário
+   perdeu para C por 0-3/1-3 → +2,0; alvo venceu C por 3-0 e o jogo do adversário com C
+   foi a 5 sets → +1,0. Entra se `gap = score_alvo − score_adv + bônus` for pelo menos
+   5,0 e o adversário tiver score ≤ 0. Os dois com score ≥ 3,0 são descartados.
 
-Os vetos de vencedor x vencedor e perdedor x perdedor continuam. Sem odds, ou com cache
-de odds acima de 20 minutos, não há entrada. Os resultados do dia vêm do MoviOdds
-(`/results`) e ficam em `DATA_DIR` (`forma_dia_v5.json`) para não repetir chamada fora da grade.
+Vários aprovados no mesmo bloco saem ordenados pelo maior gap. Se ninguém passar, a
+mensagem diz `Entrada: NENHUMA` e lista o motivo de cada jogo. Sem odds, ou com cache
+de odds acima de 20 minutos, não há entrada.
+
+Os resultados ficam em `DATA_DIR/forma_dia_v5.json`, com início e fim de cada jogo.
+Se a API não manda o fim, usamos o início mais 18, 24 ou 35 minutos (3, 4 ou 5 sets).
+Se só há o fim, o início é o fim menos essa duração. Arquivo antigo só com `quando`
+trata esse campo como início. A lista não zera à meia-noite: guarda as últimas 8 horas.
 
 ## Odds e resultados (MoviOdds)
 
@@ -50,6 +61,7 @@ ou a falta de chave, não é tentada de novo. Os resultados finalizados acumulam
 `forma_dia_v5.json`. A grade está em `agenda_moviodds()`. Cada consulta grava `INFO`:
 `[ODDS] consulta HH:MM -> N jogos` ou `[RESULTADOS] consulta HH:MM -> N jogos`.
 Cada bloco grava `[ENTRADA YYYY-MM-DD|HH:MM] N jogos avaliados, X aprovados`.
+O jogo aprovado mostra alvo, odd, gap, os dois `score_forma` e o bônus de triangulação.
 
 ## Resultados anteriores (SportsAPI365)
 
@@ -77,10 +89,8 @@ anúncio, depois as do adversário). Nome no formato `Bilek Z.` só casa com um 
 MoviOdds (por exemplo `Zdenek Bilek`) quando não existe outro casamento possível. Sem
 casamento único, o histórico daquele jogador fica de fora.
 
-Critério extra, só de bloqueio: se o favorito perdeu os 2 confrontos diretos mais
-recentes contra esse adversário nos 14 dias, a entrada não sai
-(`❌ H2H: favorito perdeu os 2 últimos para X`). As quatro regras da forma do dia e as
-160 consultas do MoviOdds continuam iguais.
+Essas linhas são só informação. O H2H de 14 dias não bloqueia a entrada. As 160
+consultas do MoviOdds continuam iguais.
 
 ## Configuração (variáveis de ambiente)
 Veja `.env.example`. **Nunca** coloque tokens no código nem faça commit do `.env`.
@@ -104,7 +114,7 @@ Monte um volume em `/data`.
 ## Testes
 ```
 pip install -r requirements.txt
-python tests/test_v5.py && python tests/test_v5_discussao.py && python tests/test_v5_filtro.py && python tests/test_v5_moviodds.py && python tests/test_v5_odds_agenda.py && python tests/test_v5_sportsapi365.py
+python tests/test_v5.py && python tests/test_v5_discussao.py && python tests/test_v5_filtro.py && python tests/test_v5_moviodds.py && python tests/test_v5_odds_agenda.py && python tests/test_v5_sportsapi365.py && python tests/test_v5_forma.py
 ```
 
 🔞 +18 · Aposte com responsabilidade.
