@@ -1,6 +1,6 @@
 """Resumo diário das 00:05: entradas persistidas, liquidação sem rede e um envio só.
 
-requests é sempre simulado. A grade do MoviOdds continua em 160 consultas/dia.
+requests é sempre simulado. A grade do MoviOdds fica em 144 consultas/dia.
 """
 import os
 import sys
@@ -53,7 +53,7 @@ def jogo_forma(home, away, sh, sa, inicio):
         "league": "Czech Liga Pro",
     }
 
-check(b.MOVIODDS_CHAMADAS_DIA == 160, b.MOVIODDS_CHAMADAS_DIA)
+check(b.MOVIODDS_CHAMADAS_DIA == 144, b.MOVIODDS_CHAMADAS_DIA)
 
 caminho = b.Path(D) / "entradas_v5.json"
 livro = b.LivroEntradas(caminho)

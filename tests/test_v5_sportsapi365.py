@@ -1,4 +1,4 @@
-"""SportsAPI365: resultados anteriores, sem mexer no filtro do dia nem nas 160 do MoviOdds.
+"""SportsAPI365: resultados anteriores, sem mexer no filtro do dia nem nas 144 do MoviOdds.
 
 A rede é sempre simulada. A chave de teste não pode aparecer em log nem em arquivo.
 """
@@ -146,8 +146,8 @@ def boom(*a, **k):
 
 # ---------- o filtro de hoje e o orçamento do MoviOdds não mudam ----------
 check(b.ODD_MIN_ALVO == 1.25 and b.ODD_MAX_ALVO == 1.85, (b.ODD_MIN_ALVO, b.ODD_MAX_ALVO))
-check(b.MOVIODDS_CHAMADAS_DIA == 160, b.MOVIODDS_CHAMADAS_DIA)
-check(b.MOVIODDS_CHAMADAS_MES_31 == 4960, b.MOVIODDS_CHAMADAS_MES_31)
+check(b.MOVIODDS_CHAMADAS_DIA == 144, b.MOVIODDS_CHAMADAS_DIA)
+check(b.MOVIODDS_CHAMADAS_MES_31 == 4464, b.MOVIODDS_CHAMADAS_MES_31)
 check(s.TETO_DIA == 40 and s.TETO_PLANO == 50 and s.FOLGA_RESTANTE == 10, (s.TETO_DIA, s.FOLGA_RESTANTE))
 check(s.HOST == "table-tennis-api-live-scores-stats-odds-predictions.p.rapidapi.com", s.HOST)
 check(s.TORNEIO == "87328107" and s.LIMITE_PAGINA == 100 and s.MAX_PAGINAS == 3, s.TORNEIO)
@@ -519,8 +519,8 @@ check(len(partes) == 1, [len(p) for p in partes])
 msg = partes[0]
 check(len(verdes) == 2 and [v[1] for v in verdes] == ["Ivan Hora", "Petr Svoboda"], verdes)
 check(any(o.home == "Petr Svoboda" for o in defs), "aprovado continua definitivo")
-check("09:00 — Ivan Hora x Adam Kral\nEntrada: <b>Ivan Hora</b> @ 1.40" in msg, msg)
-check("09:10 — Petr Svoboda x Jan Novak\nEntrada: <b>Petr Svoboda</b> @ 1.50" in msg, msg)
+check("09:00 — Ivan Hora vs Adam Kral | Entrada: Ivan Hora @ 1.40" in msg, msg)
+check("09:10 — Petr Svoboda vs Jan Novak | Entrada: Petr Svoboda @ 1.50" in msg, msg)
 check(msg.index("Ivan Hora") < msg.index("Petr Svoboda"), msg)
 check("Histórico 7d" not in msg and "H2H" not in msg and "score_forma" not in msg, msg)
 check("Lukas" not in msg and "Bilek" not in msg and "Odd fora" not in msg, msg)
@@ -564,7 +564,7 @@ ant_um = anterior_de_mensagem()
 ant_um.jogos = [j for j in ant_um.jogos if j["id"] != "h8"]
 partes_um, verdes_um, _ = b.montar_mensagem_entrada(slot, [h2h_block], hh, [h2h_block], None, ant_um)
 check(len(verdes_um) == 1 and verdes_um[0][1] == "Petr Svoboda", verdes_um)
-check("09:10 — Petr Svoboda x Jan Novak" in partes_um[0] and "@ 1.50" in partes_um[0], partes_um[0])
+check("09:10 — Petr Svoboda vs Jan Novak" in partes_um[0] and "@ 1.50" in partes_um[0], partes_um[0])
 check("Histórico" not in partes_um[0] and "H2H" not in partes_um[0], partes_um[0])
 
 # ao vivo: o bloqueio vale, a linha de histórico não (ela é só do bloco)
@@ -591,12 +591,8 @@ b.processar(
     [jogo("Petr Svoboda", "Jan Novak", 1.50, 2.60, 9, 30),
      jogo("Ivan Hora", "Adam Kral", 1.40, 2.70, 9, 30)], None, None, ant,
 )
-check(len(tg.sent) == 2, tg.sent)
-junto_vivo = "\n".join(tg.sent)
-check("Petr Svoboda x Jan Novak" in junto_vivo and "Ivan Hora x Adam Kral" in junto_vivo, junto_vivo)
-check("Entrada:" in junto_vivo and "Histórico" not in junto_vivo and "H2H" not in junto_vivo, junto_vivo)
-check("score_forma" not in junto_vivo, junto_vivo)
-check("H2H: favorito perdeu" not in junto_vivo, junto_vivo)
+check(len(tg.sent) == 0, tg.sent)
+check(all("Histórico" not in t and "H2H" not in t for t in tg.sent), tg.sent)
 
 tg2 = FakeTG()
 b.processar(
@@ -605,6 +601,6 @@ b.processar(
     b.CacheSet(Path(tempfile.mkdtemp()) / "sinais2.json"), tg2, "R2",
     [jogo("Petr Svoboda", "Jan Novak", 1.50, 2.60, 9, 30)],
 )
-check(len(tg2.sent) == 1 and "Petr Svoboda" in tg2.sent[0] and "@ 1.50" in tg2.sent[0], tg2.sent)
+check(tg2.sent == [], tg2.sent)
 
 print("SPORTSAPI365 OK", N, "checks")
