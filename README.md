@@ -48,6 +48,37 @@ inclusive as retentativas das hh:55–hh:59. Os resultados finalizados acumulam 
 e `MOVIODDS_MINUTOS_RESULTADOS`). Cada consulta grava `INFO`:
 `[ODDS] consulta HH:MM -> N jogos` ou `[RESULTADOS] consulta HH:MM -> N jogos`.
 
+## Resultados anteriores (SportsAPI365)
+
+Fonte opcional, só de contexto. A chave fica em `SPORTSAPI365_KEY` (RapidAPI, plano
+gratuito, **50 requisições por dia**). Sem a variável o recurso fica desligado em
+silêncio: não há aviso, não há linha nova e o filtro de hoje não muda.
+
+Depois das **00:30 Europe/Prague**, uma vez por dia, o bot baixa os jogos já terminados
+de ontem da Czech Liga Pro (no máximo 3 páginas de 100) e guarda em
+`DATA_DIR/historico_sportsapi365.json`, mantendo **14 dias**. No primeiro arranque, sem
+esse arquivo, busca até **7 dias**. O teto do recurso é **40 chamadas por dia**; o
+contador fica em `DATA_DIR/sportsapi365_contador.json` e também obedece
+`x-ratelimit-requests-remaining` (para com 10 de folga sob as 50). HTTP 429 ou 403
+desliga a fonte até o reset. A chave não entra no código nem no log. Não há consulta
+por jogo nem por jogador: a mensagem lê só o cache.
+
+Na mensagem das hh:55, nos aprovados e na lista "Sem entrada", cada jogador com
+casamento único de nome ganha:
+
+`<b>Nome</b> — Histórico 7d: X V / Y D (Z% limpas)`
+
+Z é o percentual de jogos desses 7 dias que foram vitórias limpas (3-0 ou 3-1). Se os
+dois se enfrentaram nos 14 dias: `H2H 14d: A x B` (vitórias de quem aparece primeiro no
+anúncio, depois as do adversário). Nome no formato `Bilek Z.` só casa com um nome da
+MoviOdds (por exemplo `Zdenek Bilek`) quando não existe outro casamento possível. Sem
+casamento único, o histórico daquele jogador fica de fora.
+
+Critério extra, só de bloqueio: se o favorito perdeu os 2 confrontos diretos mais
+recentes contra esse adversário nos 14 dias, a entrada não sai
+(`❌ H2H: favorito perdeu os 2 últimos para X`). As quatro regras da forma do dia e as
+160 consultas do MoviOdds continuam iguais.
+
 ## Configuração (variáveis de ambiente)
 Veja `.env.example`. **Nunca** coloque tokens no código nem faça commit do `.env`.
 
@@ -60,6 +91,7 @@ Veja `.env.example`. **Nunca** coloque tokens no código nem faça commit do `.e
 | `TELEGRAM_OWNER_ID` | id do admin (padrão = `TELEGRAM_CHAT_ID`) |
 | `MOVIODDS_KEY` | chave do MoviOdds (odds e resultados) |
 | `MOVIODDS_KEY_2` | chave reserva do MoviOdds (opcional; usada por 30 min se a principal falhar) |
+| `SPORTSAPI365_KEY` | resultados anteriores (SportsAPI365 / RapidAPI, opcional). Sem ela, o bot segue igual |
 | `DATA_DIR` | pasta persistente dos dados (ex.: `/data`) |
 
 ## Deploy
@@ -69,7 +101,7 @@ Monte um volume em `/data`.
 ## Testes
 ```
 pip install -r requirements.txt
-python tests/test_v5.py && python tests/test_v5_discussao.py && python tests/test_v5_filtro.py && python tests/test_v5_moviodds.py && python tests/test_v5_odds_agenda.py
+python tests/test_v5.py && python tests/test_v5_discussao.py && python tests/test_v5_filtro.py && python tests/test_v5_moviodds.py && python tests/test_v5_odds_agenda.py && python tests/test_v5_sportsapi365.py
 ```
 
 🔞 +18 · Aposte com responsabilidade.

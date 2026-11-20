@@ -1,5 +1,6 @@
 import os, sys, tempfile
 os.environ.update({"DATA_DIR": tempfile.mkdtemp(), "TELEGRAM_TOKEN": "x", "TELEGRAM_CHAT_ID": "111", "TELEGRAM_GROUP_ID": "-100999"})
+os.environ.pop("SPORTSAPI365_KEY", None)
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import requests
 def _blocked(*a, **k): raise AssertionError("real HTTP")

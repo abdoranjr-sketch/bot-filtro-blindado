@@ -2,6 +2,7 @@ import os, sys, tempfile, json
 D = tempfile.mkdtemp()
 os.environ.update({"DATA_DIR": D, "TELEGRAM_TOKEN": "x", "TELEGRAM_CHAT_ID": "111", "TELEGRAM_GROUP_ID": "-100999"})
 os.environ.pop("MOVIODDS_KEY", None); os.environ.pop("TELEGRAM_OWNER_ID", None)
+os.environ.pop("SPORTSAPI365_KEY", None)
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import requests
 def _blocked(*a, **k): raise AssertionError("real HTTP call attempted")
