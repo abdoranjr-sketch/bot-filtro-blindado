@@ -2592,7 +2592,7 @@ def notificar_resultados(apostas: Apostas, tg: "Telegram") -> int:
         hoje = estatisticas([x for x in apostas.periodo(a["dia"], a["dia"])
                              if x is a or (x["status"] != "pendente" and x.get("notificado"))])
         conf = f"{esc(a['home'])} vs {esc(a['away'])}"
-      if a["status"] == "green":
+        if a["status"] == "green":
             cab = "🟢🎉 𝗚𝗥𝗘𝗘𝗡 𝗡𝗔 𝗖𝗢𝗡𝗧𝗔! 🎉🟢"
             corpo = f"🏓 {esc(a['placar'])}\n👑 𝗔𝗹𝘃𝗼: <b>{esc(a['pick'])}</b> bateu lindo! 💸🔥"
         elif a["status"] == "red":
