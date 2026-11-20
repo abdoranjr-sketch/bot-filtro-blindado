@@ -3,7 +3,7 @@
 Bot de Telegram que analisa **somente a Czech Liga Pro** (tênis de mesa), 24 horas,
 madrugada inclusive. A entrada sai **cerca de 5 minutos antes de cada bloco de início**
 (:00, :30 ou qualquer outro minuto), em qualquer modo. Se o bloco tiver jogos e nenhum
-passar, a mensagem diz `Entrada: NENHUMA — sem desnível claro nesta rodada`.
+passar, a mensagem é `HH:MM — Sem entrada`.
 Bloco sem jogos da liga não gera mensagem. GREEN/RED, resumo diário às 22:30, saudações
 e comandos (/placar /semana /mes /entradas /ajuda /id) continuam iguais.
 
@@ -28,12 +28,13 @@ finalizados nas últimas 3 horas. Para sinalizar, nesta ordem:
    foi a 5 sets → +1,0. Entra se `gap = score_alvo − score_adv + bônus` for pelo menos
    5,0 e o adversário tiver score ≤ 0. Os dois com score ≥ 3,0 são descartados.
 
-Vários aprovados no mesmo bloco saem ordenados pelo maior gap. Se ninguém passar, a
-mensagem diz `Entrada: NENHUMA` e lista o motivo de cada jogo. Sem odds, ou com cache
-de odds acima de 20 minutos, não há entrada.
+Vários aprovados no mesmo bloco saem ordenados pelo maior gap. O Telegram leva só
+a entrada: horário, `Alvo x Adversário`, em quem apostar e a odd. Se ninguém passar,
+a mensagem é `HH:MM — Sem entrada`. Score, gap, bônus e o motivo de cada jogo ficam
+no log. Sem odds, ou com cache de odds acima de 20 minutos, não há entrada.
 
 Os resultados ficam em `DATA_DIR/forma_dia_v5.json`, com início e fim de cada jogo.
-Se a API não manda o fim, usamos o início mais 18, 24 ou 35 minutos (3, 4 ou 5 sets).
+Se a API não manda o fim, usamos o início mais 15, 20 ou 25 minutos (3, 4 ou 5 sets).
 Se só há o fim, o início é o fim menos essa duração. Arquivo antigo só com `quando`
 trata esse campo como início. A lista não zera à meia-noite: guarda as últimas 8 horas.
 
@@ -61,7 +62,7 @@ ou a falta de chave, não é tentada de novo. Os resultados finalizados acumulam
 `forma_dia_v5.json`. A grade está em `agenda_moviodds()`. Cada consulta grava `INFO`:
 `[ODDS] consulta HH:MM -> N jogos` ou `[RESULTADOS] consulta HH:MM -> N jogos`.
 Cada bloco grava `[ENTRADA YYYY-MM-DD|HH:MM] N jogos avaliados, X aprovados`.
-O jogo aprovado mostra alvo, odd, gap, os dois `score_forma` e o bônus de triangulação.
+O jogo aprovado no Telegram mostra horário, alvo x adversário e a odd. O detalhe fica no log.
 
 ## Resultados anteriores (SportsAPI365)
 
@@ -76,20 +77,16 @@ esse arquivo, busca até **7 dias**. O teto do recurso é **40 chamadas por dia*
 contador fica em `DATA_DIR/sportsapi365_contador.json` e também obedece
 `x-ratelimit-requests-remaining` (para com 10 de folga sob as 50). HTTP 429 ou 403
 desliga a fonte até o reset. A chave não entra no código nem no log. Não há consulta
-por jogo nem por jogador: a mensagem lê só o cache.
+por jogo nem por jogador: o log lê só o cache.
 
-Na mensagem de cada bloco, nos aprovados e na lista "Sem entrada", cada jogador com
-casamento único de nome ganha:
+No log de cada bloco, cada jogador com casamento único de nome ganha
+`Histórico 7d: X V / Y D (Z% limpas)`. Z é o percentual de jogos desses 7 dias que
+foram vitórias limpas (3-0 ou 3-1). Se os dois se enfrentaram nos 14 dias:
+`H2H 14d: A x B`. Nome no formato `Bilek Z.` só casa com um nome da MoviOdds (por
+exemplo `Zdenek Bilek`) quando não existe outro casamento possível. Sem casamento
+único, o histórico daquele jogador fica de fora.
 
-`<b>Nome</b> — Histórico 7d: X V / Y D (Z% limpas)`
-
-Z é o percentual de jogos desses 7 dias que foram vitórias limpas (3-0 ou 3-1). Se os
-dois se enfrentaram nos 14 dias: `H2H 14d: A x B` (vitórias de quem aparece primeiro no
-anúncio, depois as do adversário). Nome no formato `Bilek Z.` só casa com um nome da
-MoviOdds (por exemplo `Zdenek Bilek`) quando não existe outro casamento possível. Sem
-casamento único, o histórico daquele jogador fica de fora.
-
-Essas linhas são só informação. O H2H de 14 dias não bloqueia a entrada. As 160
+Essas linhas não vão para o Telegram e o H2H não bloqueia a entrada. As 160
 consultas do MoviOdds continuam iguais.
 
 ## Configuração (variáveis de ambiente)

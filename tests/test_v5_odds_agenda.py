@@ -308,7 +308,7 @@ class TG:
         self.conflitos_seguidos = 0
     def send(self, text, chat_id=None, reply_to=None):
         # falha o envio para o bloco repetir dentro da janela de ~5 min, com o mesmo cache
-        return not text.startswith("🎯 <b>ENTRADA")
+        return "Sem entrada" not in text and "\nEntrada:" not in text
     def get_me(self):
         return {"username": "filtrobot", "id": 999}
     def get_updates(self, offset=0):
