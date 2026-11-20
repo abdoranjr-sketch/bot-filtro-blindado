@@ -303,19 +303,19 @@ partes, verdes, defs = b.montar_mensagem_entrada(
     slot, [medio, fraco, forte], hist_msg, [medio, fraco, forte], forma_msg, HistInfo())
 check(len(verdes) == 2 and verdes[0][1] == "Petr" and verdes[1][1] == "Milos", verdes)
 msg = partes[0]
-check(msg.index("Petr") < msg.index("Milos"), "maior gap primeiro")
-check("odd 1.55" in msg and "Gap: 10.0" in msg and "bônus triangulação +2.0" in msg, msg)
-check("score_forma 5.0" in msg and "score_forma -3.0" in msg, msg)
-check("H2H 14d: 0 x 2" in msg and "Histórico 7d: 4 V / 1 D (60% limpas)" in msg, msg)
-check("H2H: favorito perdeu" not in msg and "PASSAR (jogou no horário anterior)" not in msg, msg)
-check("PASSAR (Sem dados do dia)" in msg and "Entrada: NENHUMA" not in msg, msg)
+check(msg == (
+    "09:30 — Petr x Jan\nEntrada: <b>Petr</b> @ 1.55\n\n"
+    "09:30 — Milos x Adam\nEntrada: <b>Milos</b> @ 1.40"
+), msg)
+check("score_forma" not in msg and "Gap" not in msg and "Histórico" not in msg and "H2H" not in msg, msg)
+check("Sem Dados" not in msg, msg)
 check(any(o.home == "Sem Dados" for o in defs) is False, defs)
 
 so, vazios, _ = b.montar_mensagem_entrada(slot, [fraco], hist_msg, [fraco], forma_msg)
-check(vazios == [] and "Entrada: NENHUMA — sem desnível claro nesta rodada" in so[0], so[0])
+check(vazios == [] and so == ["09:30 — Sem entrada"], so)
 
 # ---------- fim gravado, fim estimado e meia-noite ----------
-check(b.duracao_estimada_min(3, 0) == 18 and b.duracao_estimada_min(3, 1) == 24 and b.duracao_estimada_min(3, 2) == 35, "duração")
+check(b.duracao_estimada_min(3, 0) == 15 and b.duracao_estimada_min(3, 1) == 20 and b.duracao_estimada_min(3, 2) == 25, "duração")
 cru = {"results": [
     {"league": "Czech Liga Pro", "status": "finished", "home": "Petr", "away": "Jan",
      "final_score": "3-1", "kickoff_utc": "2026-11-20T07:00:00Z", "fixture_id": "1"},
@@ -325,9 +325,9 @@ cru = {"results": [
 parsed = b.MoviOdds.parse_results(cru)
 sem_fim = next(p for p in parsed if p["id"] == "1")
 com_fim = next(p for p in parsed if p["id"] == "2")
-check(sem_fim["fim_estimado"] is True and sem_fim["fim"] - sem_fim["inicio"] == timedelta(minutes=24), sem_fim)
+check(sem_fim["fim_estimado"] is True and sem_fim["fim"] - sem_fim["inicio"] == timedelta(minutes=20), sem_fim)
 check(com_fim["fim_estimado"] is False and com_fim["inicio_estimado"] is True, com_fim)
-check(com_fim["fim"] - com_fim["inicio"] == timedelta(minutes=35), com_fim["inicio"])
+check(com_fim["fim"] - com_fim["inicio"] == timedelta(minutes=25), com_fim["inicio"])
 
 forma = b.FormaDia(b.Path(D) / "forma_teste.json")
 tarde = {
@@ -346,6 +346,6 @@ check(petr.score_forma == 3.0 and petr.jogos_hoje == 1, (petr.score_forma, petr.
 legado = {"sets_home": 3, "sets_away": 1, "quando": "2026-11-20T08:00:00+01:00", "home": "A", "away": "B"}
 norm = b._normalizar_gravado(legado)
 check(norm["fim_estimado"] is True and norm["inicio"].startswith("2026-11-20T08:00:00"), norm)
-check(norm["fim"].startswith("2026-11-20T08:24:00"), norm["fim"])
+check(norm["fim"].startswith("2026-11-20T08:20:00"), norm["fim"])
 
 print("FORMA OK", N, "checks")

@@ -519,20 +519,31 @@ check(len(partes) == 1, [len(p) for p in partes])
 msg = partes[0]
 check(len(verdes) == 2 and [v[1] for v in verdes] == ["Ivan Hora", "Petr Svoboda"], verdes)
 check(any(o.home == "Petr Svoboda" for o in defs), "aprovado continua definitivo")
-verde_txt, fora_txt = msg.split("<b>Sem entrada</b>", 1)
-check("Histórico 7d: 2 V / 0 D (100% limpas)" in verde_txt, verde_txt)
-check("Histórico 7d: 0 V / 2 D (0% limpas)" in verde_txt, verde_txt)
-check("H2H 14d: 1 x 0" in verde_txt, verde_txt)
-check("<b>Petr Svoboda</b> — Histórico 7d: 3 V / 1 D (50% limpas)" in verde_txt, verde_txt)
-check("<b>Jan Novak</b> — Histórico 7d: 1 V / 1 D (50% limpas)" in verde_txt, verde_txt)
-check("H2H 14d: 0 x 2" in verde_txt, verde_txt)
-check("H2H: favorito perdeu os 2 últimos" not in msg, msg)
-check("Entrada: NENHUMA" not in msg and "<b>SINAL VERDE</b>" in msg, msg[:400])
-check("Odd fora da faixa: 2.40" in fora_txt, fora_txt)
-check(fora_txt.count("Histórico 7d: 1 V / 0 D (100% limpas)") == 2, fora_txt)
-linhas_hist = [ln for ln in msg.splitlines() if "Histórico 7d:" in ln]
-check(linhas_hist and all("Bilek" not in ln and "Horak" not in ln and "Ruzicka" not in ln for ln in linhas_hist), linhas_hist)
-check(all("H2H 14d" not in ln or "0 x 2" in ln or "1 x 0" in ln for ln in msg.splitlines()), msg)
+check("09:00 — Ivan Hora x Adam Kral\nEntrada: <b>Ivan Hora</b> @ 1.40" in msg, msg)
+check("09:10 — Petr Svoboda x Jan Novak\nEntrada: <b>Petr Svoboda</b> @ 1.50" in msg, msg)
+check(msg.index("Ivan Hora") < msg.index("Petr Svoboda"), msg)
+check("Histórico 7d" not in msg and "H2H" not in msg and "score_forma" not in msg, msg)
+check("Lukas" not in msg and "Bilek" not in msg and "Odd fora" not in msg, msg)
+check("Sem entrada" not in msg, msg)
+
+class CapLog(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.rows = []
+    def emit(self, record):
+        self.rows.append(record.getMessage())
+
+cap_msg = CapLog()
+b.log.addHandler(cap_msg)
+try:
+    b.montar_mensagem_entrada(slot, lista, hh, lista, None, ant)
+finally:
+    b.log.removeHandler(cap_msg)
+logs_bloco = "\n".join(cap_msg.rows)
+check("score_forma" in logs_bloco and "Gap:" in logs_bloco, logs_bloco)
+check("Histórico 7d: 2 V / 0 D (100% limpas)" in logs_bloco, logs_bloco)
+check("H2H 14d: 1 x 0" in logs_bloco and "H2H 14d: 0 x 2" in logs_bloco, logs_bloco)
+check("Odd fora da faixa: 2.40" in logs_bloco, logs_bloco)
 
 # derrota de hoje continua na frente do H2H; a linha de histórico permanece
 hh_perda = novo_hist()
@@ -545,19 +556,16 @@ so_perda = jogo("Petr Svoboda", "Jan Novak", 1.37, 2.90, 9, 0)
 partes_perda, verdes_perda, _ = b.montar_mensagem_entrada(slot, [so_perda], hh_perda, [so_perda], None, ant)
 check(verdes_perda == [], verdes_perda)
 texto_perda = partes_perda[0]
-check("PASSAR (Sem domínio comprovado)" in texto_perda, texto_perda)
-check("H2H: favorito perdeu os 2 últimos" not in texto_perda, texto_perda)
-check("Histórico 7d: 3 V / 1 D (50% limpas)" in texto_perda, texto_perda)
-check("H2H 14d: 0 x 2" in texto_perda, texto_perda)
+check(texto_perda == "08:55 — Sem entrada", texto_perda)
+check("Histórico" not in texto_perda and "H2H" not in texto_perda and "Petr" not in texto_perda, texto_perda)
 
 # uma derrota antiga no H2H não bloqueia o verde
 ant_um = anterior_de_mensagem()
 ant_um.jogos = [j for j in ant_um.jogos if j["id"] != "h8"]
 partes_um, verdes_um, _ = b.montar_mensagem_entrada(slot, [h2h_block], hh, [h2h_block], None, ant_um)
 check(len(verdes_um) == 1 and verdes_um[0][1] == "Petr Svoboda", verdes_um)
-check("H2H: favorito perdeu os 2 últimos" not in partes_um[0], partes_um[0])
-check("H2H 14d: 0 x 1" in partes_um[0], partes_um[0])
-check("Histórico 7d: 3 V / 1 D (50% limpas)" in partes_um[0], partes_um[0])
+check("09:10 — Petr Svoboda x Jan Novak" in partes_um[0] and "@ 1.50" in partes_um[0], partes_um[0])
+check("Histórico" not in partes_um[0] and "H2H" not in partes_um[0], partes_um[0])
 
 # ao vivo: o bloqueio vale, a linha de histórico não (ela é só do bloco)
 b.agora_cet = lambda: K(9, 29)
@@ -585,8 +593,9 @@ b.processar(
 )
 check(len(tg.sent) == 2, tg.sent)
 junto_vivo = "\n".join(tg.sent)
-check("SINAL VERDE" in junto_vivo and "Ivan Hora" in junto_vivo and "Petr Svoboda" in junto_vivo, junto_vivo)
-check("Histórico 7d" not in junto_vivo and "H2H 14d" not in junto_vivo, junto_vivo)
+check("Petr Svoboda x Jan Novak" in junto_vivo and "Ivan Hora x Adam Kral" in junto_vivo, junto_vivo)
+check("Entrada:" in junto_vivo and "Histórico" not in junto_vivo and "H2H" not in junto_vivo, junto_vivo)
+check("score_forma" not in junto_vivo, junto_vivo)
 check("H2H: favorito perdeu" not in junto_vivo, junto_vivo)
 
 tg2 = FakeTG()
@@ -596,6 +605,6 @@ b.processar(
     b.CacheSet(Path(tempfile.mkdtemp()) / "sinais2.json"), tg2, "R2",
     [jogo("Petr Svoboda", "Jan Novak", 1.50, 2.60, 9, 30)],
 )
-check(len(tg2.sent) == 1 and "Petr Svoboda" in tg2.sent[0] and "odd 1.50" in tg2.sent[0], tg2.sent)
+check(len(tg2.sent) == 1 and "Petr Svoboda" in tg2.sent[0] and "@ 1.50" in tg2.sent[0], tg2.sent)
 
 print("SPORTSAPI365 OK", N, "checks")

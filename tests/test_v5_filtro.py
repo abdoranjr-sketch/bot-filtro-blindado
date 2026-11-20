@@ -299,14 +299,12 @@ partes, verdes_msg, defs = b.montar_mensagem_entrada(
 )
 check(len(partes) == 1 and all(tlen(p) <= b.TG_LIMITE for p in partes), [tlen(p) for p in partes])
 msg = partes[0]
-check("<b>SINAL VERDE</b>" in msg and "Petr Svoboda" in msg and "odd 1.50" in msg, msg)
-check(msg.index("<b>SINAL VERDE</b>") < msg.index("<b>Sem entrada</b>"), msg)
-check("❌ <b>Ivan Hora</b> vs <b>Adam Kral</b> (09:10) — PASSAR (Odd fora da faixa: 2.60)" in msg, msg)
-check("Sem odds de mercado" in msg, msg)
-check("⏳ <b>Sem &amp; Placar</b> vs <b>Com Historico</b> (09:30) — PASSAR (Sem dados do dia)" in msg, msg)
-check("Tom &amp; Jerry" in msg and "A &lt; B" in msg, msg)
-check("Tom & Jerry" not in msg and "A < B" not in msg, msg)
-check("… e mais" not in msg, msg)
+check(msg == "09:00 — Petr Svoboda x Jan Novak\nEntrada: <b>Petr Svoboda</b> @ 1.50", msg)
+check("score_forma" not in msg and "Histórico" not in msg and "Ivan Hora" not in msg, msg)
+check("Sem &" not in msg and "Tom" not in msg, msg)
+escapado = b._texto_entrada("09:40", "Tom & Jerry", "A < B", 1.70)
+check("Tom &amp; Jerry" in escapado and "A &lt; B" in escapado, escapado)
+check("Tom & Jerry" not in escapado and "A < B" not in escapado, escapado)
 check(any(o.home == "Ivan Hora" for o in defs) and any(o.home == "Sem & Placar" for o in defs) is False, defs)
 check(len(verdes_msg) == 1 and verdes_msg[0][1] == "Petr Svoboda", verdes_msg)
 
@@ -327,20 +325,17 @@ b.processar(
 )
 check(len(tg.sent) == 1, tg.sent)
 ao_vivo = tg.sent[0]
-check("SINAL VERDE" in ao_vivo and "score_forma 5.0" in ao_vivo and "odd 1.50" in ao_vivo, ao_vivo)
-check("score_forma -2.0" in ao_vivo, ao_vivo)
-check("Ivan Hora" not in ao_vivo, ao_vivo)
-check("Jan Novak" in ao_vivo and "<b>Jan Novak</b>" in ao_vivo, ao_vivo)
+check(ao_vivo == "09:20 — Petr Svoboda x Jan Novak\nEntrada: <b>Petr Svoboda</b> @ 1.50", ao_vivo)
+check("score_forma" not in ao_vivo and "Ivan Hora" not in ao_vivo, ao_vivo)
+check("Jan Novak" in ao_vivo, ao_vivo)
 
 # sem nenhum verde, a mensagem lista cada jogo em vez de só o resumo
 so_fora = [vencedores, indef]
 partes_fora, verdes_fora, _ = b.montar_mensagem_entrada(slot, so_fora, h, so_fora)
 check(verdes_fora == [] and len(partes_fora) == 1, partes_fora)
 fora = partes_fora[0]
-check("Entrada: NENHUMA — sem desnível claro nesta rodada" in fora, fora)
-check("❌ <b>Ivan Hora</b> vs <b>Adam Kral</b> (09:10)" in fora, fora)
-check("⏳ <b>Sem &amp; Placar</b> vs <b>Com Historico</b> (09:30) — PASSAR (Sem dados do dia)" in fora, fora)
-check("<b>SINAL VERDE</b>" not in fora, fora)
+check(fora == "08:55 — Sem entrada", fora)
+check("Ivan Hora" not in fora and "score_forma" not in fora, fora)
 
 # mensagem longa: cada envio cabe no Telegram e o corte diz quantos jogos faltam
 at(12, 55)
@@ -371,18 +366,13 @@ for i, jogo_i in enumerate(lista):
 slot = "2026-11-20|13:00"
 tg = FakeTG()
 ok = b.processar_entrada(slot, h, b.CacheSet(b.ENVIADOS_FILE), b.CacheSet(b.ENTRADAS_FILE), tg, lista, None)
-check(ok and tg.sent, "envio da entrada longa")
+check(ok and tg.sent == [
+    "13:00 — Verde Bom x Verde Ruim\nEntrada: <b>Verde Bom</b> @ 1.40"
+], tg.sent)
 check(all(0 < tlen(t) <= b.TG_LIMITE for t in tg.sent), [tlen(t) for t in tg.sent])
 junto = "\n".join(tg.sent)
-omitidos = sum(int(n) for n in re.findall(r"… e mais (\d+) jogos", junto))
-listados = junto.count("❌") + junto.count("⏳")
-check(listados + omitidos == total_fora, (listados, omitidos, total_fora))
-check("… e mais" in junto or len(tg.sent) > 1, "passou de 4096 e foi cortada ou dividida")
-check(junto.count("🚨") == 1 and "Verde Bom" in junto and "Verde Ruim" in junto, junto[:500])
-check("Tom &amp; Jerry" in junto and "A &lt; B" in junto, junto)
-check("Tom & Jerry" not in junto and "<b>A < B</b>" not in junto, "escape HTML")
-check("Sem dados do dia" in junto and "Sem &amp; Placar" in junto, junto)
-check("Odd fora da faixa" in junto, "motivos na lista de fora")
+check("Aaa00" not in junto and "Tom" not in junto and "score_forma" not in junto, junto)
+check("Sem entrada" not in junto and total_fora == 47, total_fora)
 
 # ---------- forma na janela, modo rígido ----------
 at(8, 55)
@@ -430,10 +420,8 @@ ruins = [
 partes, verdes_nenhuma, _ = b.montar_mensagem_entrada(slot, ruins, hh, ruins)
 check(verdes_nenhuma == [] and partes, partes)
 texto = "\n".join(partes)
-check("Entrada: NENHUMA — sem desnível claro nesta rodada" in texto, texto)
-check("PASSAR (Sem domínio comprovado)" in texto, texto)
-check("PASSAR (Sem dados do dia)" in texto, texto)
-check("<b>Sem entrada</b> — 2 jogos:" in texto, texto)
+check(texto == "08:55 — Sem entrada", texto)
+check("PASSAR" not in texto and "Didi" not in texto, texto)
 
 # outra liga não entra na forma; o cache em DATA_DIR sobrevive a uma nova instância
 cru = {

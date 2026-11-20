@@ -10,10 +10,10 @@ Horários CET (Europe/Madrid = Europe/Prague no inverno e no horário de verão 
 somente Czech Liga Pro — 24 h, madrugada inclusive):
   ENTRADA (pré-jogo): por bloco de início, cerca de 5 min antes (janela de 8 a 2 min),
       para TODOS os jogos da liga, qualquer que seja o modo (FORA/ENTRADA/R2/R1).
-      Se o bloco tiver jogos e nenhum passar no filtro rígido, a mensagem diz
-      "Entrada: NENHUMA — sem desnível claro nesta rodada" e lista o motivo de cada jogo.
-      Bloco sem jogos da liga não gera mensagem. Acima de 4096 caracteres, a lista de
-      fora é cortada ("… e mais N jogos") ou a mensagem é dividida em mais de um envio.
+      A mensagem leva só a entrada: horário, alvo x adversário, em quem apostar e a odd.
+      Se o bloco tiver jogos e nenhum passar, a mensagem é "HH:MM — Sem entrada".
+      Score, gap, bônus e Histórico/H2H ficam só no log. Bloco sem jogos da liga
+      não gera mensagem.
   Fallback ao vivo: nos últimos 2 min antes do início, se o bloco ainda não foi enviado.
 
 Filtro rígido por FORMA NA JANELA (últimas 4 h; o alvo é quem tem o melhor
@@ -66,8 +66,8 @@ Configuração (variáveis de ambiente):
 Resultados anteriores (SportsAPI365, opcional): uma vez por dia, depois das 00:30
 Europe/Prague, baixa os finalizados de ontem (no primeiro arranque, até 7 dias) e
 guarda 14 dias em DATA_DIR. No máximo 40 chamadas por dia, abaixo do teto de 50.
-A mensagem de cada bloco mostra a forma de 7 dias e o H2H de 14, lidos só do cache,
-como informação. O H2H não bloqueia entrada. As 160 consultas do MoviOdds não mudam.
+A forma de 7 dias e o H2H de 14 são lidos só do cache e vão para o log, não para
+o Telegram. O H2H não bloqueia entrada. As 160 consultas do MoviOdds não mudam.
 """
 
 from __future__ import annotations
@@ -136,8 +136,8 @@ SLOT_ANTERIOR_MIN = 45
 # forma_dia_v5.json guarda um pouco mais que a janela de 4 h, inclusive depois da meia-noite.
 RETENCAO_FORMA_H = 8
 # Sem fim na API: início + estes minutos. Sem início: fim − estes minutos.
-# 3 sets ~18 min, 4 ~24, 5 ~35 na Czech Liga Pro.
-DURACAO_ESTIMADA_MIN = {3: 18, 4: 24, 5: 35}
+# 3 sets = 15 min, 4 sets = 20 min, 5 sets = 25 min.
+DURACAO_ESTIMADA_MIN = {3: 15, 4: 20, 5: 25}
 PESOS_FORMA = {
     (3, 0): 3.0,
     (3, 1): 2.0,
@@ -148,7 +148,7 @@ PESOS_FORMA = {
 }
 
 def duracao_estimada_min(sets_a: int, sets_b: int) -> int:
-    return DURACAO_ESTIMADA_MIN.get(int(sets_a) + int(sets_b), 24)
+    return DURACAO_ESTIMADA_MIN.get(int(sets_a) + int(sets_b), 20)
 
 def estimar_fim(inicio: datetime, sets_a: int, sets_b: int) -> datetime:
     return inicio + timedelta(minutes=duracao_estimada_min(sets_a, sets_b))
@@ -681,7 +681,7 @@ class FormaDia:
     """Jogos finalizados da Czech Liga Pro, com início e fim, em DATA_DIR.
 
     Cada consulta MoviOdds de resultados funde aqui. Sem `finished_at`, o fim é
-    o início mais 18/24/35 min (3/4/5 sets). Sem início, o início é o fim menos
+    o início mais 15/20/25 min (3/4/5 sets). Sem início, o início é o fim menos
     essa duração. Arquivo antigo só com `quando` trata esse campo como início.
     A lista não zera à meia-noite: fica quem terminou nas últimas 8 h.
     Resposta vazia não apaga o que já foi gravado.
@@ -1968,22 +1968,19 @@ def _empacotar_entrada(cab: str, blocos: List[str], aviso: str, linhas: List[str
 def _hora_jogo(o: OddsMatch) -> str:
     return o.kickoff.strftime("%H:%M") if o.kickoff else "—"
 
-def _bloco_verde(o: OddsMatch, fav: Optional[str], motivos: List[str], extras: Optional[List[str]] = None) -> str:
-    texto = (
-        f"🚨 <b>{_html(o.home)}</b> vs <b>{_html(o.away)}</b> ({_hora_jogo(o)})\n"
-        f"👉 Entrada: <b>{_html(fav or '')}</b>\n" + "\n".join(motivos)
-    )
-    if extras:
-        texto += "\n" + "\n".join(extras)
-    return texto
+def _adversario_do_alvo(alvo: str, home: str, away: str) -> str:
+    return away if mesmo_jogador(alvo or "", home) else home
 
-def _linha_sem_entrada(o: OddsMatch, status: str, motivos: List[str], extras: Optional[List[str]] = None) -> str:
-    marca = "⏳" if status == "indefinido" else "❌"
-    motivo = "; ".join(motivos) if motivos else status
-    linha = f"{marca} <b>{_html(o.home)}</b> vs <b>{_html(o.away)}</b> ({_hora_jogo(o)}) — {motivo}"
-    if extras:
-        linha += "\n" + "\n".join(extras)
-    return linha
+def _texto_entrada(hora: str, alvo: str, adversario: str, odd: Optional[float]) -> str:
+    """Só o essencial: horário, alvo x adversário, em quem apostar e a odd."""
+    odd_txt = f"{odd:.2f}" if isinstance(odd, (int, float)) else "—"
+    return (
+        f"{hora} — {_html(alvo)} x {_html(adversario)}\n"
+        f"Entrada: <b>{_html(alvo)}</b> @ {odd_txt}"
+    )
+
+def _texto_sem_entrada(hora: str) -> str:
+    return f"{hora} — Sem entrada"
 
 def _linhas_historico(hist, home: str, away: str, universo: List[str]) -> List[str]:
     """Forma 7d e H2H 14d lidos do cache. Sem chave, sem casamento único ou sem jogos: nada."""
@@ -2014,13 +2011,13 @@ def montar_mensagem_entrada(slot_key: str, confrontos: List[OddsMatch], hist: Hi
                             ) -> Tuple[List[str], list, List[OddsMatch]]:
     """Retorna (textos, verdes, avaliados_definitivos). Cada texto cabe no Telegram.
 
-    historico_anterior só acrescenta as linhas de Histórico 7d e H2H 14d.
-    Verdes saem ordenados pelo maior gap. Sem verde, a mensagem diz NENHUMA.
+    O Telegram leva só a entrada (ou "HH:MM — Sem entrada"). Score, gap, bônus
+    e Histórico/H2H vão para o log. Verdes saem ordenados pelo maior gap.
     """
     odds_map = montar_odds_map(odds_list)
     grade = odds_list if agenda is None else agenda
     hora = _alvo_bloco(slot_key).split("|", 1)[1]
-    cab = f"🎯 <b>ENTRADA {hora}</b> — Czech Liga Pro {hora} CET"
+    rotulo = _alvo_bloco(slot_key)
 
     if not confrontos:
         return [], [], []
@@ -2031,24 +2028,26 @@ def montar_mensagem_entrada(slot_key: str, confrontos: List[OddsMatch], hist: Hi
         d = analisar_confronto(o.home, o.away, hist, odds_map, o.kickoff, forma, grade)
         extras = _linhas_historico(historico_anterior, o.home, o.away, universo)
         avaliados.append((o, d, extras))
+        log.info("[ENTRADA %s] %s x %s | %s | %s", rotulo, o.home, o.away, d.status,
+                 " ; ".join(d.motivos) or d.status)
+        if extras:
+            log.info("[ENTRADA %s] contexto | %s", rotulo, " ; ".join(extras))
     verdes_raw = [item for item in avaliados if item[1].status == "verde"]
     verdes_raw.sort(key=lambda item: item[1].gap or 0.0, reverse=True)
-    fora = [item for item in avaliados if item[1].status != "verde"]
 
-    verdes, definitivos, blocos, linhas = [], [], [], []
-    for o, d, extras in verdes_raw:
-        definitivos.append(o)
-        verdes.append((o, d.alvo))
-        blocos.append(_bloco_verde(o, d.alvo, d.motivos, extras))
-    for o, d, extras in fora:
-        if d.status == "bloqueado":
+    verdes, definitivos = [], []
+    for o, d, _extras in avaliados:
+        if d.status in ("verde", "bloqueado"):
             definitivos.append(o)
-        linhas.append(_linha_sem_entrada(o, d.status, d.motivos, extras))
-
-    aviso = "" if verdes else "Entrada: NENHUMA — sem desnível claro nesta rodada"
-    rodape = f"⏰ {agora_cet().strftime('%H:%M:%S')} CET"
-    textos = _empacotar_entrada(cab, blocos, aviso, linhas, rodape)
-    return textos, verdes, definitivos
+    blocos = []
+    for o, d, _extras in verdes_raw:
+        verdes.append((o, d.alvo))
+        blocos.append(_texto_entrada(
+            _hora_jogo(o), d.alvo or "", _adversario_do_alvo(d.alvo or "", o.home, o.away), d.odd,
+        ))
+    if not blocos:
+        return [_texto_sem_entrada(hora)], [], definitivos
+    return _partir_telegram("\n\n".join(blocos)), verdes, definitivos
 
 def processar_entrada(slot_key: str, hist: Historico, sinais: CacheSet, entradas: CacheSet,
                       tg: Telegram, odds_list: List[OddsMatch], apostas: "Apostas" = None,
@@ -2130,20 +2129,18 @@ def processar(matches: List[LiveMatch], hist: Historico, finished: CacheSet,
             odds_map = montar_odds_map([o for o in odds_list if not o.in_play])
             status, motivos, fav = avaliar(m, hist, odds_map, forma, agenda=agenda or odds_list)
             if status == "verde":
-                texto = (
-                    f"🚨 <b>SINAL VERDE</b> (ao vivo)\n\n"
-                    f"<b>{_html(m.player1)}</b> vs <b>{_html(m.player2)}</b>\n"
-                    f"👉 Entrada: <b>{_html(fav or '')}</b>\n"
-                    f"Placar: {m.score1 if m.score1 is not None else '-'} : {m.score2 if m.score2 is not None else '-'} ({m.current_set or '—'})\n\n"
-                    + "\n".join(motivos) +
-                    f"\n\n⏰ {agora_cet().strftime('%H:%M:%S')} CET"
+                odd = _odd_do_jogador(fav or "", pre)
+                texto = _texto_entrada(
+                    kickoff.strftime("%H:%M"), fav or "",
+                    _adversario_do_alvo(fav or "", m.player1, m.player2), odd,
                 )
                 partes = _partir_telegram(texto)
                 if partes and all(tg.send(p) for p in partes):
                     sinais.add(key_s)
                     if apostas is not None:
                         apostas.add(m.player1, m.player2, fav, f"{agora_cet().hour:02d}", "ao_vivo")
-                    log.info(f"SINAL VERDE (ao vivo) → {m.player1} vs {m.player2}")
+                    log.info("SINAL VERDE (ao vivo) → %s vs %s | %s",
+                             m.player1, m.player2, " ; ".join(motivos))
 
 def _trazer_resultados(scoremondo: "ScoreMondo", forma: Optional[FormaDia]) -> List[Resultado]:
     """Página de resultados do ScoreMondo, também gravada na forma do dia."""
