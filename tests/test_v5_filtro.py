@@ -62,7 +62,7 @@ def avaliar(h, match):
 
 check(b.ODD_MAX_FAVORITO == 1.65, b.ODD_MAX_FAVORITO)
 check(b.ODDS_CACHE_TTL_S == 20 * 60, b.ODDS_CACHE_TTL_S)
-check(b.HORAS_ENTRADA == (8, 12, 16, 20), b.HORAS_ENTRADA)
+check(b.HORAS_ENTRADA == tuple(range(24)), b.HORAS_ENTRADA)
 
 # ---------- favorito só pela odd da 2ª rodada ----------
 # R2: Petr 1.50 x Jan 2.50. R1 gravou Jan 1.30 e Petr 1.60 (outros adversários).
@@ -73,9 +73,9 @@ gravar(h, "Jan", "limpo", 1.30, K(8, 0), 3, 0)
 gravar(h, "Petr", "derrota", 1.60, K(8, 30), 0, 3)
 status, motivos, fav = avaliar(h, jogo("Petr", "Jan", 1.50, 2.50, 9, 0))
 check(status == "bloqueado" and fav is None, (status, motivos, fav))
-check(any("Inversão" in m and "Petr" in m for m in motivos), motivos)
-# Jan aparece só como resultado da 1ª rodada, nunca como favorito.
-check(all("favorito Jan" not in m and "favorito (Jan" not in m for m in motivos), motivos)
+check(any("❌ favorito Petr já perdeu hoje (0-3) — odd 1.50 ignorada" in m for m in motivos), motivos)
+# Jan aparece só como resultado do dia, nunca como favorito.
+check(all("favorito Jan" not in m and "Inversão" not in m and "Regra 4" not in m for m in motivos), motivos)
 
 # ---------- sem odds de mercado não há entrada ----------
 gravar(h, "Petr", "limpo", None, K(8, 0), 3, 1)
@@ -102,20 +102,31 @@ status, motivos, fav = avaliar(h, jogo("Petr", "Jan", 1.80, 2.00, 9, 0))
 check(status == "bloqueado" and fav is None and any(
     "sem favorito claro" in m and "1.80" in m and "2.00" in m for m in motivos), (status, motivos, fav))
 status, motivos, fav = avaliar(h, jogo("Petr", "Jan", 1.65, 2.20, 9, 0))
+check(status == "indefinido" and fav is None and any(
+    m == "⏳ favorito só tem 1 vitória limpa hoje, precisa de 2" for m in motivos), (status, motivos, fav))
+h.definir_jogos("Petr", [
+    {"resultado": "limpo", "sets_favor": 3, "sets_contra": 0, "inicio": K(8, 0)},
+    {"resultado": "limpo", "sets_favor": 3, "sets_contra": 1, "inicio": K(8, 20)},
+])
+status, motivos, fav = avaliar(h, jogo("Petr", "Jan", 1.65, 2.20, 9, 0))
 check(status == "verde" and fav == "Petr", (status, motivos, fav))
 
-# ---------- 1.50/2.50 limpo contra derrota é verde, mesmo com odd da 1ª invertida ----------
-gravar(h, "Petr", "limpo", 1.60, K(8, 0), 3, 1)
+# ---------- 1.50/2.50 com 2 limpas contra derrota feia é verde, mesmo com odd antiga invertida ----------
+h.definir_jogos("Petr", [
+    {"resultado": "limpo", "sets_favor": 3, "sets_contra": 0, "inicio": K(8, 0)},
+    {"resultado": "limpo", "sets_favor": 3, "sets_contra": 1, "inicio": K(8, 20)},
+])
 gravar(h, "Jan", "derrota", 1.30, K(8, 30), 1, 3)
 status, motivos, fav = avaliar(h, jogo("Petr", "Jan", 1.50, 2.50, 9, 30))
 check(status == "verde" and fav == "Petr", (status, motivos, fav))
 check(any("odd 1.50" in m for m in motivos), motivos)
+check(any("Petr hoje: 3-0, 3-1 | Adversário hoje: 1-3" in m for m in motivos), motivos)
 
-# ---------- favorito que veio de 3-2 continua bloqueado ----------
+# ---------- favorito com 3-2 leva alerta amarelo e não repete a regra antiga ----------
 gravar(h, "Petr", "desgaste", 1.20, K(8, 0), 3, 2)
 gravar(h, "Jan", "derrota", 1.90, K(8, 0), 2, 3)
 status, motivos, fav = avaliar(h, jogo("Petr", "Jan", 1.50, 2.50, 9, 0))
-check(status == "bloqueado" and fav is None and any("3-2" in m for m in motivos), (status, motivos, fav))
+check(status == "bloqueado" and fav is None and motivos == ["⚠️ alerta amarelo: vitória sofrida 3-2"], (status, motivos, fav))
 
 # vencedor x vencedor e perdedor x perdedor não mudam
 gravar(h, "Petr", "limpo", 1.20, K(8, 0), 3, 0)
@@ -150,15 +161,21 @@ ao_vivo = b.OddsMatch("G Gi", "H Ha", 1.50, 2.50, True, None, K(9, 0))
 nomes = [o.home for o in b.confrontos_rodada2([sem, fora, ao_vivo, com], slot)]
 check(nomes == ["A Alfa"], nomes)
 
-# ---------- 1ª rodada fora de hh:00–hh:50 do ciclo não entra ----------
+# ---------- forma do dia conta desde 00:00, inclusive antes do ciclo; ontem não conta ----------
 h = novo_hist()
-gravar(h, "Petr", "limpo", 1.40, K(7, 30), 3, 0)
-gravar(h, "Jan", "derrota", 2.00, K(8, 0), 1, 3)
+h.definir_jogos("Petr", [
+    {"resultado": "limpo", "sets_favor": 3, "sets_contra": 0, "inicio": K(7, 30)},
+    {"resultado": "limpo", "sets_favor": 3, "sets_contra": 1, "inicio": K(8, 20)},
+])
+h.definir_jogos("Jan", [{"resultado": "derrota", "sets_favor": 0, "sets_contra": 3, "inicio": K(8, 0)}])
 status, motivos, fav = avaliar(h, jogo("Petr", "Jan", 1.50, 2.50, 9, 0))
-check(status == "bloqueado" and fav is None and any("hh:00" in m for m in motivos), (status, motivos))
-gravar(h, "Petr", "limpo", 1.40, K(8, 50), 3, 0)
+check(status == "verde" and fav == "Petr" and any("3-0, 3-1" in m for m in motivos), (status, motivos, fav))
+h.definir_jogos("Petr", [
+    {"resultado": "limpo", "sets_favor": 3, "sets_contra": 0, "inicio": K(23, 40, 19)},
+    {"resultado": "limpo", "sets_favor": 3, "sets_contra": 1, "inicio": K(8, 10)},
+])
 status, motivos, fav = avaliar(h, jogo("Petr", "Jan", 1.50, 2.50, 9, 0))
-check(status == "verde" and fav == "Petr", (status, motivos, fav))
+check(status == "indefinido" and any("1 vitória limpa" in m for m in motivos), (status, motivos, fav))
 
 # ---------- ao vivo: grava R1 só na janela; entrada só pré-jogo da 2ª ----------
 at(8, 40)
@@ -178,8 +195,11 @@ check(h.get("C Gama") is None and h.get("E Eps") is None, h.data)
 check(tg.sent == [], tg.sent)
 
 at(9, 10)
-gravar(h, "Petr", "limpo", 1.60, K(8, 0), 3, 0)
-gravar(h, "Jan", "derrota", 1.30, K(8, 30), 1, 3)
+h.definir_jogos("Petr", [
+    {"resultado": "limpo", "sets_favor": 3, "sets_contra": 0, "inicio": K(8, 0)},
+    {"resultado": "limpo", "sets_favor": 3, "sets_contra": 1, "inicio": K(8, 20)},
+])
+h.definir_jogos("Jan", [{"resultado": "derrota", "sets_favor": 1, "sets_contra": 3, "inicio": K(8, 30)}])
 ap = b.Apostas(b.APOSTAS_FILE)
 antes = len(ap.itens)
 futuro = b.LiveMatch("Petr", "Jan", None, None, None, False, K(9, 30))
@@ -198,17 +218,25 @@ check(entrada and entrada["pick"] == "Petr" and entrada["origem"] == "ao_vivo", 
 check(ap.get(b.chave_sinal("A Alfa", "B Beta", "2026-11-20")) is None, "jogo já iniciado")
 check(ap.get(b.chave_sinal("C Gama", "D Delta", "2026-11-20")) is None, "sem hora ou odd ao vivo")
 
-# ---------- primeira consulta do dia é 07:48, antes do jogo das 08:00 ----------
+# ---------- 07:48 continua, mas não é a primeira consulta do dia ----------
 slots = []
 for hora in range(24):
     for minuto in range(60):
         quando = b.TZ.localize(datetime(2026, 11, 20, hora, minuto))
-        if b.slot_moviodds_atual(quando):
-            slots.append((hora, minuto))
-check(slots[0] == (7, 48), slots[0])
-check(all(hora > 7 or (hora == 7 and minuto >= 48) for hora, minuto in slots), slots[:3])
-check(b.slot_moviodds_atual(b.TZ.localize(datetime(2026, 11, 20, 7, 47))) is None, "07:47 fora")
-check(b.slot_moviodds_atual(b.TZ.localize(datetime(2026, 11, 20, 7, 48))) == "2026-11-20|07:48", "07:48")
+        if b.slot_resultados_atual(quando):
+            slots.append((hora, minuto, "resultados"))
+        elif b.slot_moviodds_atual(quando):
+            slots.append((hora, minuto, "odds"))
+check(slots[0] == (0, 10, "resultados"), slots[0])
+check((7, 48, "resultados") in slots, slots)
+check(b.MOVIODDS_CHAMADAS_DIA == 160 and b.MOVIODDS_CHAMADAS_DIA <= 161, b.MOVIODDS_CHAMADAS_DIA)
+check(b.MOVIODDS_CHAMADAS_MES_31 == 4960 and b.MOVIODDS_CHAMADAS_MES_31 < 5000, b.MOVIODDS_CHAMADAS_MES_31)
+check(len(slots) == b.MOVIODDS_CHAMADAS_DIA, len(slots))
+check(b.slot_moviodds_atual(b.TZ.localize(datetime(2026, 11, 20, 7, 48))) is None, "07:48 é resultado")
+check(b.slot_resultados_atual(b.TZ.localize(datetime(2026, 11, 20, 7, 48))) == "2026-11-20|07:48", "07:48")
+for h in range(24):
+    antes = [m for hh, m in b.MOVIODDS_MINUTOS_ODDS if hh == h and m < 55]
+    check(any(0 < 55 - m <= 20 for m in antes), (h, antes))
 
 # ---------- motivos com placar, odds e jogos que ficaram de fora ----------
 def tlen(s):
@@ -247,25 +275,29 @@ gravar(h, "Jan Novak", "limpo", 1.30, K(8, 15), 3, 1)
 status, motivos, fav = avaliar(h, jogo("Petr Svoboda", "Jan Novak", 1.45, 2.40, 9, 10))
 check(status == "bloqueado" and fav is None, (status, motivos, fav))
 check(any(
-    "Inversão" in m and "favorito Petr (1.45) perdeu 1-3 na 1ª" in m and "Jan venceu 3-1" in m
-    for m in motivos
+    "❌ favorito Petr Svoboda já perdeu hoje (1-3) — odd 1.45 ignorada" in m for m in motivos
 ), motivos)
-check(all("favorito Jan" not in m for m in motivos), motivos)
+check(all("favorito Jan" not in m and "Inversão" not in m and "Regra 5" not in m for m in motivos), motivos)
 
-gravar(h, "Petr Svoboda", "limpo", 1.40, K(8, 0), 3, 1)
+h.definir_jogos("Petr Svoboda", [
+    {"resultado": "limpo", "sets_favor": 3, "sets_contra": 0, "inicio": K(8, 0)},
+    {"resultado": "limpo", "sets_favor": 3, "sets_contra": 1, "inicio": K(8, 15)},
+])
 gravar(h, "Jan Novak", "derrota", 2.20, K(8, 25), 1, 3)
 status, motivos, fav = avaliar(h, jogo("Petr Svoboda", "Jan Novak", 1.50, 2.50, 9, 10))
 check(status == "verde" and fav == "Petr Svoboda", (status, fav, motivos))
 check(any(m.startswith("✓ Favorito:") and "odd 1.50" in m and "Petr Svoboda" in m for m in motivos), motivos)
-check(any("✓ Vitória limpa na 1ª rodada (Petr venceu 3-1)" == m for m in motivos), motivos)
-check(any("✓ Adversário veio de derrota (Jan perdeu 1-3)" == m for m in motivos), motivos)
+check(any("✓ Petr Svoboda hoje: 3-0, 3-1 | Adversário hoje: 1-3" == m for m in motivos), motivos)
 check(any("✓ Odds: Petr Svoboda 1.50 x Jan Novak 2.50" == m for m in motivos), motivos)
-check(any(m.startswith("✓ ") for m in motivos), motivos)
+check(all("1ª rodada" not in m and "Regra 5" not in m for m in motivos), motivos)
 
 # mensagem hh:55: verdes e, em seguida, cada jogo que não entrou
 h = novo_hist()
-gravar(h, "Petr Svoboda", "limpo", 1.40, K(8, 0), 3, 1)
-gravar(h, "Jan Novak", "derrota", 2.20, K(8, 25), 1, 3)
+h.definir_jogos("Petr Svoboda", [
+    {"resultado": "limpo", "sets_favor": 3, "sets_contra": 0, "inicio": K(8, 0)},
+    {"resultado": "limpo", "sets_favor": 3, "sets_contra": 1, "inicio": K(8, 15)},
+])
+h.definir_jogos("Jan Novak", [{"resultado": "derrota", "sets_favor": 1, "sets_contra": 3, "inicio": K(8, 25)}])
 gravar(h, "Ivan Hora", "limpo", 1.20, K(8, 5), 3, 1)
 gravar(h, "Adam Kral", "limpo", 1.20, K(8, 15), 3, 0)
 gravar(h, "Lukas Maly", "derrota", 1.80, K(8, 20), 1, 3)
@@ -288,7 +320,7 @@ check("<b>SINAL VERDE</b>" in msg and "Petr Svoboda" in msg and "odd 1.50" in ms
 check(msg.index("<b>SINAL VERDE</b>") < msg.index("<b>Sem entrada</b>"), msg)
 check("❌ <b>Ivan Hora</b> vs <b>Adam Kral</b> (09:10) — Duelo de Vencedores (Regra 2): Ivan venceu 3-1, Adam venceu 3-0" in msg, msg)
 check("sem odds de mercado" in msg and "Lukas perdeu 1-3" in msg, msg)
-check("⏳ <b>Sem &amp; Placar</b> vs <b>Com Historico</b> (09:30) — sem placar da 1ª rodada de Sem &amp; Placar" in msg, msg)
+check("⏳ <b>Sem &amp; Placar</b> vs <b>Com Historico</b> (09:30) — sem jogo finalizado hoje de Sem &amp; Placar" in msg, msg)
 check("Tom &amp; Jerry" in msg and "A &lt; B" in msg, msg)
 check("Tom & Jerry" not in msg and "A < B" not in msg, msg)
 check("… e mais" not in msg, msg)
@@ -312,7 +344,7 @@ b.processar(
 )
 check(len(tg.sent) == 1, tg.sent)
 ao_vivo = tg.sent[0]
-check("SINAL VERDE" in ao_vivo and "Petr venceu 3-1" in ao_vivo and "Jan perdeu 1-3" in ao_vivo, ao_vivo)
+check("SINAL VERDE" in ao_vivo and "Petr Svoboda hoje: 3-0, 3-1 | Adversário hoje: 1-3" in ao_vivo, ao_vivo)
 check("✓ Odds: Jan Novak 2.50 x Petr Svoboda 1.50" in ao_vivo, ao_vivo)
 check("Ivan Hora" not in ao_vivo and "Duelo de Vencedores" not in ao_vivo, ao_vivo)
 check("Jan Novak" in ao_vivo and "<b>Jan Novak</b>" in ao_vivo, ao_vivo)
@@ -322,16 +354,19 @@ so_fora = [vencedores, indef]
 partes_fora, verdes_fora, _ = b.montar_mensagem_entrada(slot, so_fora, h, so_fora)
 check(verdes_fora == [] and len(partes_fora) == 1, partes_fora)
 fora = partes_fora[0]
-check("Nenhuma entrada verde (2 confrontos avaliados)." in fora, fora)
+check("Entrada: NENHUMA — sem desnível claro nesta rodada" in fora, fora)
 check("❌ <b>Ivan Hora</b> vs <b>Adam Kral</b> (09:10)" in fora, fora)
-check("⏳ <b>Sem &amp; Placar</b> vs <b>Com Historico</b> (09:30) — sem placar da 1ª rodada de Sem &amp; Placar" in fora, fora)
+check("⏳ <b>Sem &amp; Placar</b> vs <b>Com Historico</b> (09:30) — sem jogo finalizado hoje de Sem &amp; Placar" in fora, fora)
 check("<b>SINAL VERDE</b>" not in fora, fora)
 
 # mensagem longa: cada envio cabe no Telegram e o corte diz quantos jogos faltam
 at(12, 55)
 h = novo_hist()
-gravar(h, "Verde Bom", "limpo", 1.40, K(12, 5), 3, 0)
-gravar(h, "Verde Ruim", "derrota", 2.10, K(12, 15), 0, 3)
+h.definir_jogos("Verde Bom", [
+    {"resultado": "limpo", "sets_favor": 3, "sets_contra": 0, "inicio": K(12, 5)},
+    {"resultado": "limpo", "sets_favor": 3, "sets_contra": 1, "inicio": K(12, 25)},
+])
+h.definir_jogos("Verde Ruim", [{"resultado": "derrota", "sets_favor": 0, "sets_contra": 3, "inicio": K(12, 15)}])
 gravar(h, "Tom & Jerry", "limpo", 1.20, K(12, 0), 3, 0)
 gravar(h, "A < B", "limpo", 1.20, K(12, 0), 3, 1)
 gravar(h, "Com Historico", "derrota", 1.80, K(12, 20), 0, 3)
@@ -361,7 +396,82 @@ check("… e mais" in junto or len(tg.sent) > 1, "passou de 4096 e foi cortada o
 check(junto.count("🚨") == 1 and "Verde Bom" in junto and "Verde Ruim" in junto, junto[:500])
 check("Tom &amp; Jerry" in junto and "A &lt; B" in junto, junto)
 check("Tom & Jerry" not in junto and "<b>A < B</b>" not in junto, "escape HTML")
-check("sem placar da 1ª rodada de Sem &amp; Placar" in junto, junto)
+check("sem jogo finalizado hoje de Sem &amp; Placar" in junto, junto)
 check("Duelo de Vencedores (Regra 2)" in junto and "venceu 3-1" in junto, "motivos na lista de fora")
+
+# ---------- forma do dia, modo rígido ----------
+def dois(fav_jogos, und_jogos, oh=1.45, oa=2.40, fav="Didi", und="Rival"):
+    hh = novo_hist()
+    hh.definir_jogos(fav, fav_jogos)
+    hh.definir_jogos(und, und_jogos)
+    return avaliar(hh, jogo(fav, und, oh, oa, 9, 0))
+
+def jg(sf, sc, hora, minuto=0):
+    res = b.classificar(sf, sc)
+    return {"resultado": res, "sets_favor": sf, "sets_contra": sc, "inicio": K(hora, minuto)}
+
+status, motivos, fav = dois([jg(3, 0, 8), jg(3, 1, 8, 20)], [jg(0, 3, 8, 5), jg(1, 3, 8, 30)])
+check(status == "verde" and fav == "Didi", (status, motivos, fav))
+check(any("Didi hoje: 3-0, 3-1 | Adversário hoje: 0-3, 1-3" in m for m in motivos), motivos)
+check(any("odd 1.45" in m for m in motivos), motivos)
+check(any(m.startswith("✓ Odds:") and "1.45" in m and "2.40" in m for m in motivos), motivos)
+
+status, motivos, fav = dois(
+    [jg(3, 0, 8), jg(1, 3, 8, 20), jg(3, 1, 8, 40)],
+    [jg(0, 3, 8, 10)], oh=1.37, oa=2.90,
+)
+check(status == "bloqueado" and fav is None, (status, motivos))
+check(motivos == ["❌ favorito Didi já perdeu hoje (1-3) — odd 1.37 ignorada"], motivos)
+
+status, motivos, fav = dois([jg(3, 0, 8), jg(3, 1, 8, 15), jg(3, 2, 8, 35)], [jg(0, 3, 8, 10)])
+check(status == "bloqueado" and motivos == ["⚠️ alerta amarelo: vitória sofrida 3-2"], (status, motivos))
+
+status, motivos, fav = dois([jg(3, 0, 8)], [jg(0, 3, 8, 10)])
+check(status == "indefinido" and motivos == ["⏳ favorito só tem 1 vitória limpa hoje, precisa de 2"], motivos)
+
+status, motivos, fav = dois([jg(3, 0, 8), jg(3, 1, 8, 20)], [jg(2, 3, 8, 10), jg(3, 1, 8, 40)])
+check(status == "bloqueado" and motivos == ["❌ adversário sem derrota feia hoje"], motivos)
+
+hh = novo_hist()
+hh.definir_jogos("Didi", [jg(3, 2, 8), jg(3, 0, 8, 20)])
+hh.definir_jogos("Rival", [jg(3, 0, 8, 5)])
+slot = "2026-11-20|08:55"
+ruins = [
+    jogo("Didi", "Rival", 1.37, 2.80, 9, 0),
+    jogo("Solo", "Outro", 1.40, 2.50, 9, 10),
+]
+partes, verdes_nenhuma, _ = b.montar_mensagem_entrada(slot, ruins, hh, ruins)
+check(verdes_nenhuma == [] and partes, partes)
+texto = "\n".join(partes)
+check("Entrada: NENHUMA — sem desnível claro nesta rodada" in texto, texto)
+check("⚠️ alerta amarelo: vitória sofrida 3-2" in texto, texto)
+check("sem jogo finalizado hoje" in texto, texto)
+check("<b>Sem entrada</b> — 2 jogos:" in texto, texto)
+
+# outra liga não entra na forma; o cache em DATA_DIR sobrevive a uma nova instância
+cru = {
+    "results": [
+        {"league": "Czech Liga Pro", "status": "finished", "home": "Didi", "away": "Rival",
+         "final_score": "3-0", "finished_at": "2026-11-20T08:10:00Z", "fixture_id": "91"},
+        {"league": "TT Elite Series", "status": "finished", "home": "Zeta", "away": "Yps",
+         "final_score": "3-0", "finished_at": "2026-11-20T08:00:00Z", "fixture_id": "92"},
+        {"league": "Czech Liga Pro", "status": "unknown", "home": "A", "away": "B",
+         "final_score": "2-2", "finished_at": "2026-11-20T08:20:00Z", "fixture_id": "93"},
+        {"league": "Czech Liga Pro", "status": "finished", "home": "E", "away": "F",
+         "final_score": "11-7,11-9,11-6", "finished_at": "2026-11-20T09:00:00Z", "fixture_id": "94"},
+    ]
+}
+parsed = b.MoviOdds.parse_results(cru)
+check(len(parsed) == 2 and {p["id"] for p in parsed} == {"91", "94"}, parsed)
+check(parsed[0]["sets_home"] == 3 and parsed[0]["sets_away"] == 0, parsed[0])
+check(parsed[1]["sets_home"] == 3 and parsed[1]["sets_away"] == 0, parsed[1])
+forma = b.FormaDia()
+forma.mesclar_movi(parsed, K(10, 0))
+check(len(forma.jogos) == 2 and forma.dia == "2026-11-20", forma.jogos)
+check(all(j["league"] == "Czech Liga Pro" for j in forma.jogos), forma.jogos)
+de_novo = b.FormaDia()
+check(len(de_novo.jogos) == 2 and de_novo.do_jogador("Didi", "2026-11-20")[0]["sets_favor"] == 3, de_novo.jogos)
+forma.mesclar_movi(parsed, b.TZ.localize(datetime(2026, 11, 21, 0, 5)))
+check(forma.dia == "2026-11-21" and forma.jogos == [], forma.jogos)
 
 print("FILTRO OK", N, "checks")
