@@ -8,18 +8,20 @@ Fontes: ScoreMondo (jogos, resultados e placar ao vivo — páginas públicas) e
 
 ## Odds (MoviOdds)
 
-O MoviOdds não é consultado a cada scrape. São **52 consultas por dia** (~1.600 por mês),
-sempre no fuso CET (Europe/Madrid). Para cada ciclo hh em 08, 12, 16 e 20 — os jogos
-da 2ª rodada começam em hh+1:00 — a grade começa 12 minutos antes:
+O MoviOdds não é consultado a cada scrape. São **92 consultas por dia** (~2.760 por mês),
+sempre no fuso CET (Europe/Madrid). A 1ª rodada de cada ciclo hh em 08, 12, 16 e 20
+começa em hh:00, então a grade começa 12 minutos antes:
 
 | Momento | Minutos | Consultas |
 |---|---|---|
-| Antes da entrada | hh:48, hh:54, hh:55 | 3 |
+| Antes da 1ª rodada | (hh-1):48, (hh-1):54 | 2 |
+| 1ª rodada | hh:00, :06, :12, :18, :20, :24, :30, :36, :42, :48 | 10 |
+| Entrada | hh:55 | 1 |
 | 2ª rodada | (hh+1):00, :06, :12, :18, :20, :24, :30, :36, :42, :48 | 10 |
 
-13 por ciclo, 4 ciclos, 52 no dia. O :55 existe porque a entrada precisa de odds naquele
-minuto; o :20 existe porque a grade de 6 minutos cai em :18 e :24. Entre hh:00 e hh:47
-não há consulta: a 1ª rodada reutiliza o cache, mesmo que esteja vazio ou antigo.
+23 por ciclo, 4 ciclos, 92 no dia. O :55 existe porque a entrada precisa de odds naquele
+minuto; os :20 existem porque a grade de 6 minutos cai em :18 e :24. Nos minutos
+intermediários a 1ª rodada, a entrada e a 2ª rodada reutilizam o cache.
 
 Cada slot (`YYYY-MM-DD|HH:MM`) é consultado uma vez. Se a resposta vier vazia por erro
 da API, o mesmo slot tem uma nova tentativa depois de cerca de 60 segundos (no máximo
