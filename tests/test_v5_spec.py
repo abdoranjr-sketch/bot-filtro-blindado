@@ -3,10 +3,11 @@
 requests é sempre simulado. A grade do MoviOdds fica em 144 consultas/dia.
 """
 import csv
+import logging
 import os
 import sys
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 
 D = tempfile.mkdtemp()
 os.environ.update({
@@ -55,10 +56,12 @@ check(b.MOVIODDS_CHAMADAS_MES_31 == 4464 and b.MOVIODDS_CHAMADAS_MES_31 < 5000, 
 check(len(b.MOVIODDS_MINUTOS_ODDS) == 96 and len(b.MOVIODDS_MINUTOS_RESULTADOS) == 48, "96+48")
 check(all(m in (23, 53) for _, m in b.MOVIODDS_MINUTOS_RESULTADOS), "resultados :23/:53")
 check(b.dentro_da_antecedencia(K(9, 30), K(9, 25)), ":25 avisa o :30")
+check(b.dentro_da_antecedencia(K(9, 30), K(9, 26)), "ciclo atrasado ainda avisa")
+check(b.dentro_da_antecedencia(K(9, 30), K(9, 29)), "até 4 min depois")
 check(b.dentro_da_antecedencia(K(10, 0), K(9, 55)), ":55 avisa o :00")
 check(b.dentro_da_antecedencia(K(0, 0, 21), K(23, 55)), "23:55 avisa 00:00")
-check(not b.dentro_da_antecedencia(K(9, 30), K(9, 24)), "fora do minuto")
-check(not b.dentro_da_antecedencia(K(9, 30), K(9, 26)), "depois do minuto")
+check(not b.dentro_da_antecedencia(K(9, 30), K(9, 24)), "antes da janela")
+check(not b.dentro_da_antecedencia(K(9, 30), K(9, 30)), "no apito já passou")
 check(not b.dentro_da_antecedencia(K(9, 15), K(9, 10)), "bloco :15 não tem alerta")
 check(not b.dentro_do_fallback(K(9, 30), K(9, 29)), "sem fallback ao vivo")
 lista = [
@@ -171,5 +174,61 @@ with b.AUDITORIA_FILE.open(encoding="utf-8", newline="") as fh:
     fim = list(csv.DictReader(fh))
 check(fim[0]["resultado"] == "GREEN" and fim[1]["resultado"] == "RED", fim)
 check(livro.itens[1]["status"] == "red", livro.itens[1])
+
+# ---------- ciclo de ~38 s atravessa :25 e manda uma mensagem só ----------
+class _TG:
+    def __init__(self):
+        self.sent = []
+
+    def send(self, texto, chat_id=None, reply_to=None):
+        self.sent.append(texto)
+        return True
+
+class _Log(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.rows = []
+
+    def emit(self, record):
+        self.rows.append(record.getMessage())
+
+base = b.TZ.localize(datetime(2026, 11, 20, 19, 24, 40))
+jogo = b.OddsMatch("Petr Svoboda", "Jan Novak", 1.50, 2.40, True, None, b.TZ.localize(datetime(2026, 11, 20, 19, 30)))
+caminho = b.Path(D) / "entradas_ciclo.json"
+entradas = b.CacheSet(caminho)
+sinais = b.CacheSet(b.Path(D) / "sinais_ciclo.json")
+hist = b.Historico()
+tg = _TG()
+tent = {}
+cap = _Log()
+b.log.addHandler(cap)
+try:
+    for i in range(8):
+        agora = base + timedelta(seconds=38 * i)
+        b.agora_cet = lambda a=agora: a
+        b.despachar_alerta(agora, [jogo], entradas, tent, tg, hist, sinais, odds_frescas=True)
+finally:
+    b.log.removeHandler(cap)
+check(len(tg.sent) == 1, tg.sent)
+check(tg.sent[0] == "19:30 — Sem entrada", tg.sent[0])
+check(any(m.startswith("[ENTRADA 2026-11-20|19:30] 1 jogos avaliados, 0 aprovados") for m in cap.rows), cap.rows)
+reinicio = b.CacheSet(caminho)
+tg2 = _TG()
+b.agora_cet = lambda: base + timedelta(seconds=38 * 3)
+check(b.despachar_alerta(b.agora_cet(), [jogo], reinicio, {}, tg2, hist, sinais) is False, "não repete")
+check(tg2.sent == [], tg2.sent)
+
+vazio = _TG()
+cap2 = _Log()
+b.log.addHandler(cap2)
+try:
+    quando = b.TZ.localize(datetime(2026, 11, 20, 20, 25, 20))
+    b.agora_cet = lambda: quando
+    b.despachar_alerta(quando, [], b.CacheSet(b.Path(D) / "entradas_vazio.json"), {}, vazio,
+                       hist, b.CacheSet(b.Path(D) / "sinais_vazio.json"), odds_frescas=False)
+finally:
+    b.log.removeHandler(cap2)
+check(vazio.sent == ["20:30 — Sem entrada"], vazio.sent)
+check(any("0 jogos avaliados, 0 aprovados (sem odds frescas / 0 jogos na grade)" in m for m in cap2.rows), cap2.rows)
 
 print("SPEC OK", N, "checks")

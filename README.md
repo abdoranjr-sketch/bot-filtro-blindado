@@ -51,6 +51,7 @@ A primeira do dia é **00:00**.
 | Resultados | :23 e :53 (logo antes do alerta) | 48 |
 
 96 + 48 = 144. O alerta sai às **:25** (bloco das :30) e às **:55** (bloco das :00).
+Se o ciclo acordar até 4 minutos depois, a mensagem sai na mesma, uma vez por bloco.
 Nesse minuto a odd tem 10 minutos, abaixo dos 20. Nos outros minutos o cache vale.
 Se a API falha, o mesmo slot tenta de
 novo depois de cerca de 60 segundos (no máximo 2).
