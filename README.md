@@ -72,8 +72,13 @@ resumo do dia anterior, uma vez: `Resumo DD/MM`, totais e saldo (green = odd−1
 red = −1). Sem entradas: `Resumo DD/MM — nenhuma entrada`. Pendente não entra
 no saldo; se fechar depois, aparece no resumo seguinte.
 O Telegram manda uma linha por jogo: `HH:MM — Jogador A vs Jogador B | Entrada: Alvo @ Odd`.
+Se `GEMINI_API_KEY` existir, cada entrada aprovada ganha uma segunda linha
+`🤖 Gemini: <veredito>` (no máximo uma chamada por bloco, 8s, modelo
+`gemini-2.5-flash`, ou o valor de `GEMINI_MODEL`, com fallback `gemini-2.0-flash`). Sem a chave, ou se a API falhar, essa linha não aparece
+e o alerta não espera. `HH:MM — Sem entrada` não chama o Gemini.
 Sem sinal: `HH:MM — Sem entrada`. O detalhe fica no log. A auditoria em
-`DATA_DIR/auditoria_v5.csv` recebe cada entrada e, cerca de 35 minutos depois do
+`DATA_DIR/auditoria_v5.csv` recebe cada entrada (coluna `gemini` com o veredito;
+arquivos antigos ganham a coluna vazia) e, cerca de 35 minutos depois do
 apito, o resultado GREEN ou RED com os placares já guardados.
 
 ## Resultados anteriores (SportsAPI365)
@@ -116,6 +121,8 @@ Veja `.env.example`. **Nunca** coloque tokens no código nem faça commit do `.e
 | `SPORTSAPI365_KEY` | resultados anteriores (SportsAPI365 / RapidAPI, opcional). Sem ela, o bot segue igual |
 | `DATA_DIR` | pasta persistente dos dados (ex.: `/data`) |
 | `HORARIO_ANTERIOR` | `rigido` (padrão) bloqueia jogo nos 45 min anteriores; `sets` só se teve 4 ou 5 sets |
+| `GEMINI_API_KEY` | veredito curto nas entradas aprovadas (opcional; sem ela o alerta não muda) |
+| `GEMINI_MODEL` | modelo principal (padrão `gemini-2.5-flash`; fallback `gemini-2.0-flash`) |
 
 ## Deploy
 Railway/Render/Fly usam o `Dockerfile` (ou `Procfile`: `worker: python bot_filtro_blindado_v5.py`).
@@ -124,7 +131,7 @@ Monte um volume em `/data`.
 ## Testes
 ```
 pip install -r requirements.txt
-python tests/test_v5.py && python tests/test_v5_discussao.py && python tests/test_v5_filtro.py && python tests/test_v5_moviodds.py && python tests/test_v5_odds_agenda.py && python tests/test_v5_sportsapi365.py && python tests/test_v5_forma.py && python tests/test_v5_resumo.py && python tests/test_v5_spec.py
+python tests/test_v5.py && python tests/test_v5_discussao.py && python tests/test_v5_filtro.py && python tests/test_v5_moviodds.py && python tests/test_v5_odds_agenda.py && python tests/test_v5_sportsapi365.py && python tests/test_v5_forma.py && python tests/test_v5_resumo.py && python tests/test_v5_spec.py && python tests/test_v5_gemini.py
 ```
 
 🔞 +18 · Aposte com responsabilidade.
