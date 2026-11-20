@@ -12,7 +12,7 @@ Horários CET (Europe/Madrid, somente Czech Liga Pro):
       Às hh:55 o bot pega na página de jogos (fixtures) do ScoreMondo os confrontos
       da 2ª rodada (jogos que começam entre hh+1:00 e hh+1:50), confirma os
       resultados da 1ª rodada na página de resultados do ScoreMondo, aplica o filtro
-      (histórico da 1ª rodada + odds, se houver MOVIODDS_KEY) e envia UMA mensagem
+      (histórico da 1ª rodada + odds, se houver chave do MoviOdds) e envia UMA mensagem
       com todas as entradas verdes da rodada.
   2ª Rodada (fallback ao vivo): 09:00 / 09:30 → 13:00 / 13:30 → 17:00 / 17:30 → 21:00 / 21:30
       Só sinaliza confrontos que não foram avaliados às hh:55 (sem duplicar).
@@ -36,7 +36,9 @@ Configuração (variáveis de ambiente):
                 TELEGRAM_DISCUSSION_ID (grupo de discussão ligado ao canal: lá o bot
                 conversa, dá boas-vindas e responde /placar /semana /mes /entradas /ajuda;
                 as entradas, green/red, resumo e saudações continuam no TELEGRAM_GROUP_ID)
-  Opcionais:    MOVIODDS_KEY (odds; sem ela o filtro usa só "limpo vs derrota")
+  Opcionais:    MOVIODDS_KEY (odds; sem chave o filtro usa só "limpo vs derrota")
+                MOVIODDS_KEY_2 (reserva do MoviOdds, opcional: entra por 30 min se a
+                principal falhar com 401, 403, 429, 5xx ou erro de rede)
                 DATA_DIR     (pasta dos arquivos .json; padrão = pasta do script)
 """
 
@@ -65,6 +67,7 @@ import pytz
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 MOVIODDS_KEY = os.getenv("MOVIODDS_KEY", "").strip()
+MOVIODDS_KEY_2 = os.getenv("MOVIODDS_KEY_2", "").strip()
 GROUP_ID = os.getenv("TELEGRAM_GROUP_ID", "").strip() or CHAT_ID
 OWNER_ID = os.getenv("TELEGRAM_OWNER_ID", "").strip() or CHAT_ID
 # Grupo de discussão ligado ao canal (opcional): onde o bot conversa e responde comandos
@@ -351,21 +354,98 @@ def _parse_kickoff(v) -> Optional[datetime]:
         return None
 
 class MoviOdds:
+    """Odds bet365. keys é [MOVIODDS_KEY, MOVIODDS_KEY_2]; vazias são ignoradas.
+
+    A primeira chave é a principal. Se a requisição falhar com HTTP 401, 403,
+    429, 5xx ou erro de rede, a mesma chamada é repetida uma vez com a próxima
+    chave. A reserva segue em uso por 30 minutos; depois a principal é tentada
+    de novo. Sem chave, fetch_czech devolve [].
+    """
+
     URL = "https://moviodds.com/odds"
-    def __init__(self, key: str):
-        self.key = key
+    BACKUP_HOLD_SECONDS = 30 * 60
+    _FAILOVER_HTTP = frozenset({401, 403, 429})
+    _NETWORK_ERRORS = (
+        requests.ConnectionError,
+        requests.Timeout,
+        requests.exceptions.ChunkedEncodingError,
+    )
+
+    def __init__(self, keys: str | List[str] | None):
+        if keys is None:
+            raw: List = []
+        elif isinstance(keys, str):
+            raw = [keys]
+        else:
+            raw = list(keys)
+        self.keys: List[str] = []
+        for key in raw:
+            if not isinstance(key, str):
+                continue
+            cleaned = key.strip()
+            if cleaned:
+                self.keys.append(cleaned)
+        self._backup_until: Optional[float] = None
 
     def fetch_czech(self) -> List[OddsMatch]:
-        if not self.key:
+        if not self.keys:
             return []   # MoviOdds é opcional
+        use_backup = self._backup_active()
+        key = self.keys[1] if use_backup else self.keys[0]
         try:
-            r = requests.get(self.URL, params={"sport": "table_tennis"},
-                             headers={"x-api-key": self.key}, timeout=20)
-            r.raise_for_status()
-            return self.parse(r.json())
+            found = self._fetch(key)
         except Exception as e:
-            log.warning(f"MoviOdds erro: {e}")
+            if (not use_backup) and len(self.keys) > 1 and self._should_failover(e):
+                self._backup_until = time.monotonic() + self.BACKUP_HOLD_SECONDS
+                log.warning(
+                    "MoviOdds: chave reserva em uso por %s min (falha da principal: %s)",
+                    self.BACKUP_HOLD_SECONDS // 60,
+                    self._fail_reason(e),
+                )
+                try:
+                    return self._fetch(self.keys[1])
+                except Exception as backup_error:
+                    log.warning(f"MoviOdds erro: {self._safe_error(backup_error)}")
+                    return []
+            log.warning(f"MoviOdds erro: {self._safe_error(e)}")
             return []
+        if not use_backup:
+            self._backup_until = None
+        return found
+
+    def _backup_active(self) -> bool:
+        return (
+            len(self.keys) > 1
+            and self._backup_until is not None
+            and time.monotonic() < self._backup_until
+        )
+
+    def _fetch(self, key: str) -> List[OddsMatch]:
+        r = requests.get(self.URL, params={"sport": "table_tennis"},
+                         headers={"x-api-key": key}, timeout=20)
+        r.raise_for_status()
+        return self.parse(r.json())
+
+    def _should_failover(self, exc: BaseException) -> bool:
+        if isinstance(exc, requests.HTTPError):
+            code = getattr(getattr(exc, "response", None), "status_code", None)
+            return code in self._FAILOVER_HTTP or (isinstance(code, int) and 500 <= code <= 599)
+        return isinstance(exc, self._NETWORK_ERRORS)
+
+    @staticmethod
+    def _fail_reason(exc: BaseException) -> str:
+        if isinstance(exc, requests.HTTPError):
+            code = getattr(getattr(exc, "response", None), "status_code", None)
+            if isinstance(code, int):
+                return f"HTTP {code}"
+        return "erro de rede"
+
+    def _safe_error(self, exc: BaseException) -> str:
+        text = str(exc)
+        for key in sorted(self.keys, key=len, reverse=True):
+            if key:
+                text = text.replace(key, "***")
+        return text
 
     @staticmethod
     def parse(data: dict) -> List[OddsMatch]:
@@ -1334,7 +1414,7 @@ def checar_config():
         print("=" * 60)
         sys.exit(1)
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    if not MOVIODDS_KEY:
+    if not MOVIODDS_KEY and not MOVIODDS_KEY_2:
         log.warning("MOVIODDS_KEY não definida: rodando sem odds (só regra 'limpo vs derrota').")
     if str(GROUP_ID) == str(CHAT_ID):
         log.warning("TELEGRAM_GROUP_ID não definido: entradas vão para o chat privado (TELEGRAM_CHAT_ID).")
@@ -1345,7 +1425,7 @@ def main():
     tg = Telegram(TELEGRAM_TOKEN, GROUP_ID)
     hist = Historico()
     scoremondo = ScoreMondo()
-    moviodds = MoviOdds(MOVIODDS_KEY)
+    moviodds = MoviOdds([MOVIODDS_KEY, MOVIODDS_KEY_2])
     finished = CacheSet(FINISHED_FILE)
     sinais = CacheSet(ENVIADOS_FILE)
     entradas = CacheSet(ENTRADAS_FILE, limite=200)
