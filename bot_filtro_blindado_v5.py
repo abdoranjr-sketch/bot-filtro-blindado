@@ -17,12 +17,12 @@ Horários CET (Europe/Madrid, somente Czech Liga Pro):
   2ª Rodada (fallback ao vivo): 09:00 / 09:30 → 13:00 / 13:30 → 17:00 / 17:30 → 21:00 / 21:30
       Só sinaliza confrontos que não foram avaliados às hh:55 (sem duplicar).
 
-MoviOdds (odds, opcional) — 52 consultas/dia (~1.600/mês), não a cada scrape.
-  Por ciclo (hh em 08, 12, 16, 20), a partir de 12 min antes dos jogos das hh+1:00:
-  hh:48, hh:54, hh:55 (entrada) e (hh+1):00, :06, :12, :18, :20, :24, :30, :36, :42, :48.
-  Entre hh:00 e hh:47 a 1ª rodada reutiliza o cache (pode estar vazio). Se uma
-  consulta volta vazia por erro, o mesmo slot é tentado de novo depois de ~60 s
-  (no máximo 2 vezes).
+MoviOdds (odds, opcional) — 92 consultas/dia (~2.760/mês), não a cada scrape.
+  A 1ª rodada começa em hh:00 (08, 12, 16, 20). A grade começa 12 min antes:
+  (hh-1):48, (hh-1):54, depois hh:00/:06/:12/:18/:20/:24/:30/:36/:42/:48,
+  hh:55 (entrada) e (hh+1):00/:06/:12/:18/:20/:24/:30/:36/:42/:48.
+  Entre esses minutos o cache vale. Se uma consulta volta vazia por erro, o
+  mesmo slot é tentado de novo depois de ~60 s (no máximo 2 vezes).
 
 Interativo (v5) — tudo vai para o GRUPO (TELEGRAM_GROUP_ID):
   • GREEN ✅ / RED ❌ de cada entrada assim que o jogo termina + placar do dia
@@ -108,11 +108,13 @@ HORAS_ENTRADA = (8, 12, 16, 20)
 JANELAS_ENTRADA = [(h, 55, h, 59) for h in HORAS_ENTRADA]
 
 # Consultas ao MoviOdds: (deslocamento de hora a partir de cada hora de HORAS_ENTRADA, minuto).
-# A grade começa 12 min antes dos jogos (hh:48) e segue de 6 em 6 min, com dois extras:
-# hh:55 (a entrada precisa de odds frescas) e (hh+1):20 (a grade cai em :18 e :24).
-# 13 slots × 4 ciclos = 52 consultas/dia. Entre hh:00 e hh:47 não há consulta.
+# A 1ª rodada começa em hh:00. A grade começa 12 min antes, (hh-1):48, e segue de 6 em 6 min
+# nas duas rodadas. Fora da grade: (hh):20, (hh+1):20 (cai em :18 e :24) e hh:55 (entrada).
+# 23 slots × 4 ciclos = 92 consultas/dia.
 MOVIODDS_MINUTOS = tuple(sorted(
-    [(0, 48), (0, 54), (0, 55)]
+    [(-1, 48), (-1, 54)]
+    + [(0, m) for m in range(0, 49, 6)]
+    + [(0, 20), (0, 55)]
     + [(1, m) for m in range(0, 49, 6)]
     + [(1, 20)]
 ))
@@ -156,12 +158,11 @@ def slot_entrada_atual() -> Optional[str]:
 def slot_moviodds_atual(now: Optional[datetime] = None) -> Optional[str]:
     """Chave 'YYYY-MM-DD|HH:MM' se este minuto é um slot de MOVIODDS_MINUTOS; senão None.
 
-    O deslocamento de hora pode cruzar a meia-noite: um slot observado de madrugada
-    ainda pertence ao ciclo ancorado no dia anterior.
+    O deslocamento pode ser negativo ((hh-1):48) ou cruzar a meia-noite.
     """
     now = now or agora_cet()
     alvo_min = now.hour * 60 + now.minute
-    for dias_depois in (0, 1):
+    for dias_depois in (-1, 0, 1):
         for h in HORAS_ENTRADA:
             for off, minute in MOVIODDS_MINUTOS:
                 extra, minuto = divmod((h + off) * 60 + minute, 24 * 60)

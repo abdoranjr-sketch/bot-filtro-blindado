@@ -1,4 +1,4 @@
-"""Agenda do MoviOdds: 52 consultas/dia, cache entre slots, retentativa única se a API falha.
+"""Agenda do MoviOdds: 92 consultas/dia, cache entre slots, retentativa única se a API falha.
 
 requests é sempre simulado. O dia inteiro passa pelo loop de main() com o relógio no lugar.
 """
@@ -36,7 +36,9 @@ def check(c, m):
     N += 1
 
 GRADE = (
-    (0, 48), (0, 54), (0, 55),
+    (-1, 48), (-1, 54),
+    (0, 0), (0, 6), (0, 12), (0, 18), (0, 20), (0, 24),
+    (0, 30), (0, 36), (0, 42), (0, 48), (0, 55),
     (1, 0), (1, 6), (1, 12), (1, 18), (1, 20), (1, 24),
     (1, 30), (1, 36), (1, 42), (1, 48),
 )
@@ -44,8 +46,8 @@ ESPERADOS = [(h + off, minute) for h in (8, 12, 16, 20) for off, minute in GRADE
 
 check(b.MOVIODDS_MINUTOS == GRADE, b.MOVIODDS_MINUTOS)
 check(b.MOVIODDS_MAX_TENTATIVAS == 2 and b.MOVIODDS_RETRY_S == 60, "limites da retentativa")
-check(len(ESPERADOS) == 52 and len(set(ESPERADOS)) == 52, len(ESPERADOS))
-check(all(8 <= h <= 21 for h, _ in ESPERADOS), ESPERADOS)
+check(len(ESPERADOS) == 92 and len(set(ESPERADOS)) == 92, len(ESPERADOS))
+check(all(7 <= h <= 21 for h, _ in ESPERADOS), ESPERADOS)
 
 slots = set(ESPERADOS)
 for hora in range(24):
@@ -55,12 +57,18 @@ for hora in range(24):
             check(got == f"2026-11-20|{hora:02d}:{minuto:02d}", got)
         else:
             check(got is None, (hora, minuto, got))
-# hh:00–hh:47 da 1ª rodada fica de fora; :20 entra, :18 e :24 também, :28 não
+# 12 min antes de hh:00, a grade das duas rodadas, a entrada e os :20; :28 e :54 da hora seguinte ficam de fora
 for h in (8, 12, 16, 20):
-    check(b.slot_moviodds_atual(b.TZ.localize(datetime(2026, 11, 20, h, 0))) is None, h)
+    ant = h - 1
+    check(b.slot_moviodds_atual(b.TZ.localize(datetime(2026, 11, 20, ant, 48))) == f"2026-11-20|{ant:02d}:48", h)
+    check(b.slot_moviodds_atual(b.TZ.localize(datetime(2026, 11, 20, ant, 54))) == f"2026-11-20|{ant:02d}:54", h)
+    check(b.slot_moviodds_atual(b.TZ.localize(datetime(2026, 11, 20, h, 0))) == f"2026-11-20|{h:02d}:00", h)
     check(b.slot_moviodds_atual(b.TZ.localize(datetime(2026, 11, 20, h, 47))) is None, h)
+    check(b.slot_moviodds_atual(b.TZ.localize(datetime(2026, 11, 20, h, 54))) is None, h)
+    check(b.slot_moviodds_atual(b.TZ.localize(datetime(2026, 11, 20, h, 55))) == f"2026-11-20|{h:02d}:55", h)
     check(b.slot_moviodds_atual(b.TZ.localize(datetime(2026, 11, 20, h + 1, 20))) == f"2026-11-20|{h+1:02d}:20", h)
     check(b.slot_moviodds_atual(b.TZ.localize(datetime(2026, 11, 20, h + 1, 28))) is None, h)
+    check(b.slot_moviodds_atual(b.TZ.localize(datetime(2026, 11, 20, h + 1, 54))) is None, h)
 
 def response(status, payload=None, body=None):
     r = requests.Response()
@@ -235,7 +243,7 @@ b.ScoreMondo.fetch_fixtures = lambda self: []
 b.ScoreMondo.fetch_results = lambda self: []
 
 inicio = cet(20, 0, 0, 0)
-limite = cet(21, 8, 48, 0)
+limite = cet(21, 7, 48, 0)
 clock = {"dt": inicio, "ts": 1_700_000_000.0}
 b.agora_cet = lambda: clock["dt"]
 b.time.time = lambda: clock["ts"]
@@ -254,16 +262,13 @@ for handler in logging.getLogger().handlers:
 b.main()
 b.log.removeHandler(cap_dia)
 
-check(len(fetch_calls) == 52, len(fetch_calls))
-check(len(http_dia) == 52, len(http_dia))
+check(len(fetch_calls) == 92, len(fetch_calls))
+check(len(http_dia) == 92, len(http_dia))
 check([(dt.month, dt.day, dt.hour, dt.minute) for dt, _ in fetch_calls]
       == [(11, 20, h, m) for h, m in ESPERADOS],
       [(dt.hour, dt.minute) for dt, _ in fetch_calls])
 check(all(c["headers"] == {"x-api-key": KEY} and c["params"] == {"sport": "table_tennis"}
           and c["timeout"] == 20 for c in http_dia), http_dia[0])
-for dt, _ in fetch_calls:
-    if dt.hour in b.HORAS_ENTRADA:
-        check(dt.minute >= 48, dt)
 
 logs_dia = [m for lvl, m in cap_dia.rows if m.startswith("[ODDS]")]
 check(logs_dia == [f"[ODDS] consulta {h:02d}:{m:02d} -> 1 jogos" for h, m in ESPERADOS], logs_dia[:3])
@@ -287,9 +292,8 @@ check(ent_calls, "entrada chamou processar_entrada")
 confere_cache(ent_calls)
 
 primeira_consulta = fetch_calls[0][0]
-antes = [odds for dt, odds in proc_calls if dt < primeira_consulta]
-check(antes and all(odds is antes[0] and odds == [] for odds in antes), "R1 antes das 08:48 usa cache vazio")
-check(all(dt.hour == 8 and dt.minute < 48 for dt, _ in proc_calls if dt < primeira_consulta), "só a 1ª rodada das 08")
+check(primeira_consulta.hour == 7 and primeira_consulta.minute == 48, primeira_consulta)
+check(not [dt for dt, _ in proc_calls if dt < primeira_consulta], "antes das 07:48 não há scrape")
 
 for h in (8, 12, 16, 20):
     repetidas = [odds for dt, odds in ent_calls if dt.hour == h and dt.minute >= 55]
@@ -301,9 +305,6 @@ for h in (8, 12, 16, 20):
 
 ultima = fetch_calls[-1]
 check(ultima[0].hour == 21 and ultima[0].minute == 48, ultima[0])
-manha = [(dt, odds) for dt, odds in proc_calls if dt.day == 21]
-check(manha and all(dt.hour == 8 and dt.minute < 48 and odds is ultima[1] for dt, odds in manha),
-      "08:00–08:47 do dia seguinte reusa o cache das 21:48, sem consulta nova")
-check(all(dt.day == 20 for dt, _ in fetch_calls), "nenhuma consulta no dia seguinte antes das 08:48")
+check(all(dt.day == 20 for dt, _ in fetch_calls), "as 92 consultas são do dia 20, antes das 07:48 do dia seguinte")
 
 print("ODDS AGENDA OK", N, "checks")
