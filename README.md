@@ -4,7 +4,8 @@ Bot de Telegram que analisa **somente a Czech Liga Pro** (tênis de mesa), 24 ho
 madrugada inclusive. A entrada sai **cerca de 5 minutos antes de cada bloco de início**
 (:00, :30 ou qualquer outro minuto), em qualquer modo. Se o bloco tiver jogos e nenhum
 passar, a mensagem é `HH:MM — Sem entrada`.
-Bloco sem jogos da liga não gera mensagem. GREEN/RED, resumo diário às 22:30, saudações
+Bloco sem jogos da liga não gera mensagem. GREEN/RED, resumo diário às 22:30,
+resumo das entradas às 00:05 (dia anterior, em unidades), saudações
 e comandos (/placar /semana /mes /entradas /ajuda /id) continuam iguais.
 
 Fontes: ScoreMondo (jogos, placar ao vivo e resultados — páginas públicas) e MoviOdds
@@ -62,6 +63,12 @@ ou a falta de chave, não é tentada de novo. Os resultados finalizados acumulam
 `forma_dia_v5.json`. A grade está em `agenda_moviodds()`. Cada consulta grava `INFO`:
 `[ODDS] consulta HH:MM -> N jogos` ou `[RESULTADOS] consulta HH:MM -> N jogos`.
 Cada bloco grava `[ENTRADA YYYY-MM-DD|HH:MM] N jogos avaliados, X aprovados`.
+As entradas aprovadas ficam em `DATA_DIR/entradas_v5.json` (dia, horário, confronto,
+alvo, adversário e odd). O resultado sai dos placares que o MoviOdds e o
+SportsAPI365 já gravaram, sem consulta extra. Às 00:05 Europe/Prague sai um
+resumo do dia anterior, uma vez: `Resumo DD/MM`, totais e saldo (green = odd−1,
+red = −1). Sem entradas: `Resumo DD/MM — nenhuma entrada`. Pendente não entra
+no saldo; se fechar depois, aparece no resumo seguinte.
 O jogo aprovado no Telegram mostra horário, alvo x adversário e a odd. O detalhe fica no log.
 
 ## Resultados anteriores (SportsAPI365)
@@ -111,7 +118,7 @@ Monte um volume em `/data`.
 ## Testes
 ```
 pip install -r requirements.txt
-python tests/test_v5.py && python tests/test_v5_discussao.py && python tests/test_v5_filtro.py && python tests/test_v5_moviodds.py && python tests/test_v5_odds_agenda.py && python tests/test_v5_sportsapi365.py && python tests/test_v5_forma.py
+python tests/test_v5.py && python tests/test_v5_discussao.py && python tests/test_v5_filtro.py && python tests/test_v5_moviodds.py && python tests/test_v5_odds_agenda.py && python tests/test_v5_sportsapi365.py && python tests/test_v5_forma.py && python tests/test_v5_resumo.py
 ```
 
 🔞 +18 · Aposte com responsabilidade.
