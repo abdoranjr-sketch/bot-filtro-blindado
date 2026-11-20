@@ -14,6 +14,7 @@ os.environ.update({
 })
 os.environ.pop("MOVIODDS_KEY", None)
 os.environ.pop("MOVIODDS_KEY_2", None)
+os.environ.pop("SPORTSAPI365_KEY", None)
 os.environ.pop("TELEGRAM_OWNER_ID", None)
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import requests

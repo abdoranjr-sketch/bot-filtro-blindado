@@ -51,7 +51,16 @@ Configuração (variáveis de ambiente):
   Opcionais:    MOVIODDS_KEY (odds; sem chave não há entrada — falta odds de mercado)
                 MOVIODDS_KEY_2 (reserva do MoviOdds, opcional: entra por 30 min se a
                 principal falhar com 401, 403, 429, 5xx ou erro de rede)
+                SPORTSAPI365_KEY (resultados anteriores, RapidAPI; sem ela o bot segue
+                igual, sem linha de histórico e sem o bloqueio extra de H2H)
                 DATA_DIR     (pasta dos arquivos .json; padrão = pasta do script)
+
+Resultados anteriores (SportsAPI365, opcional): uma vez por dia, depois das 00:30
+Europe/Prague, baixa os finalizados de ontem (no primeiro arranque, até 7 dias) e
+guarda 14 dias em DATA_DIR. No máximo 40 chamadas por dia, abaixo do teto de 50.
+A mensagem das hh:55 mostra a forma de 7 dias e o H2H de 14, lidos só do cache.
+Se o favorito perdeu os 2 últimos confrontos diretos nesses 14 dias, a entrada é
+bloqueada. As quatro regras da forma do dia e as 160 consultas do MoviOdds não mudam.
 """
 
 from __future__ import annotations
@@ -72,6 +81,8 @@ import requests
 from bs4 import BeautifulSoup
 import pytz
 
+from historico_sportsapi365 import HistoricoSportsAPI365
+
 # ══════════════════════════════════════════════════════════════════════════════
 # CONFIGURAÇÃO
 # ══════════════════════════════════════════════════════════════════════════════
@@ -80,6 +91,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 MOVIODDS_KEY = os.getenv("MOVIODDS_KEY", "").strip()
 MOVIODDS_KEY_2 = os.getenv("MOVIODDS_KEY_2", "").strip()
+SPORTSAPI365_KEY = os.getenv("SPORTSAPI365_KEY", "").strip()
 GROUP_ID = os.getenv("TELEGRAM_GROUP_ID", "").strip() or CHAT_ID
 OWNER_ID = os.getenv("TELEGRAM_OWNER_ID", "").strip() or CHAT_ID
 # Grupo de discussão ligado ao canal (opcional): onde o bot conversa e responde comandos
@@ -1480,21 +1492,67 @@ def _empacotar_entrada(cab: str, blocos: List[str], aviso: str, linhas: List[str
 def _hora_jogo(o: OddsMatch) -> str:
     return o.kickoff.strftime("%H:%M") if o.kickoff else "—"
 
-def _bloco_verde(o: OddsMatch, fav: Optional[str], motivos: List[str]) -> str:
-    return (
+def _bloco_verde(o: OddsMatch, fav: Optional[str], motivos: List[str], extras: Optional[List[str]] = None) -> str:
+    texto = (
         f"🚨 <b>{_html(o.home)}</b> vs <b>{_html(o.away)}</b> ({_hora_jogo(o)})\n"
         f"👉 Entrada: <b>{_html(fav or '')}</b>\n" + "\n".join(motivos)
     )
+    if extras:
+        texto += "\n" + "\n".join(extras)
+    return texto
 
-def _linha_sem_entrada(o: OddsMatch, status: str, motivos: List[str]) -> str:
+def _linha_sem_entrada(o: OddsMatch, status: str, motivos: List[str], extras: Optional[List[str]] = None) -> str:
     marca = "⏳" if status == "indefinido" else "❌"
     motivo = "; ".join(motivos) if motivos else status
-    return f"{marca} <b>{_html(o.home)}</b> vs <b>{_html(o.away)}</b> ({_hora_jogo(o)}) — {motivo}"
+    linha = f"{marca} <b>{_html(o.home)}</b> vs <b>{_html(o.away)}</b> ({_hora_jogo(o)}) — {motivo}"
+    if extras:
+        linha += "\n" + "\n".join(extras)
+    return linha
+
+def _adversario_de(fav: str, p1: str, p2: str) -> str:
+    return p2 if mesmo_jogador(fav, p1) else p1
+
+def _linhas_historico(hist, home: str, away: str, universo: List[str]) -> List[str]:
+    """Forma 7d e H2H 14d lidos do cache. Sem chave, sem casamento único ou sem jogos: nada."""
+    if hist is None or not getattr(hist, "ativo", False):
+        return []
+    try:
+        agora = agora_cet()
+        linhas = []
+        for nome in (home, away):
+            info = hist.forma(nome, universo, agora)
+            if not info:
+                continue
+            v, d, pct = info
+            linhas.append(f"<b>{_html(nome)}</b> — Histórico 7d: {v} V / {d} D ({pct}% limpas)")
+        par = hist.h2h(home, away, universo, agora)
+        if par is not None:
+            linhas.append(f"H2H 14d: {par[0]} x {par[1]}")
+        return linhas
+    except Exception as exc:
+        log.warning("SportsAPI365: histórico ignorado (%s)", type(exc).__name__)
+        return []
+
+def _h2h_bloqueia(hist, fav: Optional[str], p1: str, p2: str, universo: List[str]) -> bool:
+    """Critério extra, só de bloqueio. Não altera o filtro da forma do dia."""
+    if hist is None or not getattr(hist, "ativo", False) or not fav:
+        return False
+    try:
+        return bool(hist.perdeu_ultimos_2(fav, _adversario_de(fav, p1, p2), universo, agora_cet()))
+    except Exception as exc:
+        log.warning("SportsAPI365: histórico ignorado (%s)", type(exc).__name__)
+        return False
 
 def montar_mensagem_entrada(slot_key: str, confrontos: List[OddsMatch], hist: Historico,
                             odds_list: List[OddsMatch],
-                            forma: Optional[FormaDia] = None) -> Tuple[List[str], list, List[OddsMatch]]:
-    """Retorna (textos, verdes, avaliados_definitivos). Cada texto cabe no Telegram."""
+                            forma: Optional[FormaDia] = None,
+                            historico_anterior: Optional[HistoricoSportsAPI365] = None,
+                            ) -> Tuple[List[str], list, List[OddsMatch]]:
+    """Retorna (textos, verdes, avaliados_definitivos). Cada texto cabe no Telegram.
+
+    historico_anterior só acrescenta contexto e, no máximo, troca um verde pelo
+    bloqueio de H2H. Sem o argumento, a mensagem é a do filtro rígido.
+    """
     odds_map = montar_odds_map(odds_list)
     ini, fim = janela_rodada2(slot_key)
     hora = slot_key.split("|")[1]
@@ -1504,16 +1562,23 @@ def montar_mensagem_entrada(slot_key: str, confrontos: List[OddsMatch], hist: Hi
     if not confrontos:
         return [], [], []
 
+    universo = [n for o in confrontos for n in (o.home, o.away)]
     verdes, definitivos, blocos, linhas = [], [], [], []
     for o in confrontos:
         status, motivos, fav = avaliar(o, hist, odds_map, forma)
+        if status == "verde" and _h2h_bloqueia(historico_anterior, fav, o.home, o.away, universo):
+            adv = _adversario_de(fav, o.home, o.away)
+            status, motivos, fav = "bloqueado", [
+                f"❌ H2H: favorito perdeu os 2 últimos para {_html(adv)}"
+            ], None
+        extras = _linhas_historico(historico_anterior, o.home, o.away, universo)
         if status in ("verde", "bloqueado"):
             definitivos.append(o)
         if status == "verde":
             verdes.append((o, fav))
-            blocos.append(_bloco_verde(o, fav, motivos))
+            blocos.append(_bloco_verde(o, fav, motivos, extras))
         else:
-            linhas.append(_linha_sem_entrada(o, status, motivos))
+            linhas.append(_linha_sem_entrada(o, status, motivos, extras))
 
     aviso = "" if verdes else "Entrada: NENHUMA — sem desnível claro nesta rodada"
     rodape = f"⏰ {agora_cet().strftime('%H:%M:%S')} CET"
@@ -1522,14 +1587,16 @@ def montar_mensagem_entrada(slot_key: str, confrontos: List[OddsMatch], hist: Hi
 
 def processar_entrada(slot_key: str, hist: Historico, sinais: CacheSet, entradas: CacheSet,
                       tg: Telegram, odds_list: List[OddsMatch], apostas: "Apostas" = None,
-                      forma: Optional[FormaDia] = None) -> bool:
+                      forma: Optional[FormaDia] = None,
+                      historico_anterior: Optional[HistoricoSportsAPI365] = None) -> bool:
     if entradas.has(slot_key):
         return False
     confrontos = confrontos_rodada2(odds_list, slot_key)
     if not confrontos:
         log.info(f"[ENTRADA {slot_key}] sem jogos da Czech Liga Pro nesta hora")
         return False
-    textos, verdes, definitivos = montar_mensagem_entrada(slot_key, confrontos, hist, odds_list, forma)
+    textos, verdes, definitivos = montar_mensagem_entrada(
+        slot_key, confrontos, hist, odds_list, forma, historico_anterior)
     if not textos:
         log.error(f"[ENTRADA {slot_key}] falha ao enviar — tenta de novo no próximo ciclo")
         return False
@@ -1555,8 +1622,10 @@ def processar_entrada(slot_key: str, hist: Historico, sinais: CacheSet, entradas
 
 def processar(matches: List[LiveMatch], hist: Historico, finished: CacheSet,
               sinais: CacheSet, tg: Telegram, modo: str, odds_list: List[OddsMatch],
-              apostas: "Apostas" = None, forma: Optional[FormaDia] = None):
+              apostas: "Apostas" = None, forma: Optional[FormaDia] = None,
+              historico_anterior: Optional[HistoricoSportsAPI365] = None):
     dia = agora_cet().strftime("%Y-%m-%d")
+    universo = [n for m in matches for n in (m.player1, m.player2)]
 
     for m in matches:
         key_m = f"{dia}|{m.player1}|{m.player2}|{m.score1}:{m.score2}"
@@ -1594,6 +1663,8 @@ def processar(matches: List[LiveMatch], hist: Historico, finished: CacheSet,
                 m.kickoff = kickoff
             odds_map = montar_odds_map([o for o in odds_list if not o.in_play])
             status, motivos, fav = avaliar(m, hist, odds_map, forma)
+            if status == "verde" and _h2h_bloqueia(historico_anterior, fav, m.player1, m.player2, universo):
+                status = "bloqueado"
             if status == "verde":
                 texto = (
                     f"🚨 <b>SINAL VERDE</b> (ao vivo)\n\n"
@@ -2186,6 +2257,7 @@ def main():
     hist = Historico()
     scoremondo = ScoreMondo()
     moviodds = MoviOdds([MOVIODDS_KEY, MOVIODDS_KEY_2])
+    historico_anterior = HistoricoSportsAPI365(SPORTSAPI365_KEY, DATA_DIR)
     finished = CacheSet(FINISHED_FILE)
     sinais = CacheSet(ENVIADOS_FILE)
     entradas = CacheSet(ENTRADAS_FILE, limite=200)
@@ -2243,6 +2315,8 @@ def main():
             # MoviOdds só nos minutos da grade (odds ou resultados). O resto reusa o cache.
             odds_now = obter_odds(moviodds, odds_cache)
             obter_resultados(moviodds, forma, resultados_cache)
+            # SportsAPI365: no máximo uma coleta por dia, depois das 00:30. Nunca por jogo.
+            historico_anterior.atualizar(agora_cet())
 
             slot = slot_entrada_atual()
             if slot and not entradas.has(slot) and time.time() - ultima_tentativa_entrada >= 30:
@@ -2253,7 +2327,8 @@ def main():
                 if not fixtures:
                     log.warning("ScoreMondo fixtures vazio — usando confrontos do MoviOdds (se houver)")
                 if fonte or agora_cet().minute >= 58:
-                    processar_entrada(slot, hist, sinais, entradas, tg, fonte, apostas, forma)
+                    processar_entrada(slot, hist, sinais, entradas, tg, fonte, apostas, forma,
+                                      historico_anterior)
                 else:
                     log.warning(f"[ENTRADA {slot}] sem dados ainda — nova tentativa em 30 s")
 
@@ -2267,7 +2342,8 @@ def main():
                     registrar_resultados_r1(_trazer_resultados(scoremondo, forma), hist, finished, odds_list)
                 log.info(f"[{modo}] partidas={len(matches)} | odds={len(odds_list)}")
                 if matches:
-                    processar(matches, hist, finished, sinais, tg, modo, odds_list, apostas, forma)
+                    processar(matches, hist, finished, sinais, tg, modo, odds_list, apostas, forma,
+                              historico_anterior)
                 vivos_terminados = [Resultado(m.player1, m.player2, m.score1, m.score2, None, "live")
                                     for m in matches if m.finished]
 

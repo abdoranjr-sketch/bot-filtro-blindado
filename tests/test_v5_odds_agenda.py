@@ -15,6 +15,7 @@ os.environ.update({
     "MOVIODDS_KEY": KEY,
 })
 os.environ.pop("MOVIODDS_KEY_2", None)
+os.environ.pop("SPORTSAPI365_KEY", None)
 os.environ.pop("TELEGRAM_OWNER_ID", None)
 os.environ.pop("TELEGRAM_DISCUSSION_ID", None)
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))

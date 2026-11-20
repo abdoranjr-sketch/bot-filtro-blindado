@@ -4,7 +4,7 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY bot_filtro_blindado_v5.py .
+COPY bot_filtro_blindado_v5.py historico_sportsapi365.py ./
 RUN mkdir -p /data
 # Monte um volume persistente em /data (histórico, entradas e placar)
 CMD ["python", "bot_filtro_blindado_v5.py"]
