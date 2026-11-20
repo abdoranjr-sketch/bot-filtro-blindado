@@ -27,10 +27,10 @@ K = lambda h, m, d=20: b.TZ.localize(datetime(2026, 11, d, h, m))
 at(2026,11,20,8,55,5)
 hist = b.Historico()
 for n, r in [("A Alfa","limpo"),("B Beta","derrota"),("C Gama","limpo"),("D Delta","derrota"),("E Eps","limpo"),("F Fi","derrota")]:
-    hist.set_resultado(n, r)
-fx = [b.OddsMatch("A Alfa","B Beta",None,None,False,None,K(9,0)),
-      b.OddsMatch("D Delta","C Gama",None,None,False,None,K(9,0)),
-      b.OddsMatch("E Eps","F Fi",None,None,False,None,K(9,30))]
+    hist.set_resultado(n, r, inicio=K(8, 0))
+fx = [b.OddsMatch("A Alfa","B Beta",1.50,2.50,False,None,K(9,0)),
+      b.OddsMatch("D Delta","C Gama",2.50,1.50,False,None,K(9,0)),
+      b.OddsMatch("E Eps","F Fi",1.50,2.50,False,None,K(9,30))]
 tg = FakeTG(); ap = b.Apostas(b.APOSTAS_FILE)
 sinais, entradas = b.CacheSet(b.ENVIADOS_FILE), b.CacheSet(b.ENTRADAS_FILE)
 b.processar_entrada("2026-11-20|08:55", hist, sinais, entradas, tg, fx, ap)
@@ -63,17 +63,18 @@ check(len(tg.sent) == 4 and len(ap2.itens) == 3, "entrada não reenviada")
 
 # ---------- 4. falha de envio → tenta de novo
 at(2026,11,20,16,55,3)
-for n, r in [("G Gi","limpo"),("H Ha","derrota")]: hist.set_resultado(n, r)
-b.processar_entrada("2026-11-20|16:55", hist, sinais, entradas, tg, [b.OddsMatch("G Gi","H Ha",None,None,False,None,K(17,0))], ap2)
+for n, r in [("G Gi","limpo"),("H Ha","derrota")]: hist.set_resultado(n, r, inicio=K(16, 0))
+b.processar_entrada("2026-11-20|16:55", hist, sinais, entradas, tg, [b.OddsMatch("G Gi","H Ha",1.50,2.50,False,None,K(17,0))], ap2)
 at(2026,11,20,17,30); b.resolver_apostas(ap2, [R("H Ha","G Gi",1,3,K(17,0),"9")])
 bad = FakeTG(ok=False); check(b.notificar_resultados(ap2, bad) == 0, "falhou")
 check(b.notificar_resultados(b.Apostas(b.APOSTAS_FILE), tg) == 1 and "GREEN" in tg.texts()[-1], "reenviou após falha")
 
 # ---------- 5. entrada ao vivo + resolução pela página ao vivo
 at(2026,11,20,21,10)
-for n, r in [("I Io","limpo"),("J Jo","derrota")]: hist.set_resultado(n, r)
+for n, r in [("I Io","limpo"),("J Jo","derrota")]: hist.set_resultado(n, r, inicio=K(20, 0))
 ap3 = b.Apostas(b.APOSTAS_FILE)
-b.processar([b.LiveMatch("J Jo","I Io",0,1,"S2")], hist, b.CacheSet(b.FINISHED_FILE), sinais, tg, "R2", [], ap3)
+b.processar([b.LiveMatch("J Jo","I Io",None,None,None,False,K(21,30))], hist, b.CacheSet(b.FINISHED_FILE), sinais, tg, "R2",
+            [b.OddsMatch("J Jo","I Io",2.50,1.50,False,None,K(21,30))], ap3)
 a = ap3.get(b.chave_sinal("I Io","J Jo","2026-11-20"))
 check(a and a["origem"] == "ao_vivo" and a["bloco"] == "21" and a["pick"] == "I Io", a)
 at(2026,11,20,21,30); b.resolver_apostas(ap3, [R("J Jo","I Io",3,0,None,"live")]); b.notificar_resultados(ap3, tg)

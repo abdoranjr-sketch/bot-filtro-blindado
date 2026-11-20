@@ -281,7 +281,7 @@ def capture(fn):
 
 check(b.MOVIODDS_KEY == "" and b.MOVIODDS_KEY_2 == "", "globals ainda vazios")
 msgs = capture(b.checar_config)
-check(msgs == ["MOVIODDS_KEY não definida: rodando sem odds (só regra 'limpo vs derrota')."], msgs)
+check(msgs == ["MOVIODDS_KEY não definida: rodando sem odds de mercado (não há entrada)."], msgs)
 b.MOVIODDS_KEY = PRIMARY
 try:
     check(capture(b.checar_config) == [], "principal sozinha não avisa")
