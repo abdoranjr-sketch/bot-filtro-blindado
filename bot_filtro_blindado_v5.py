@@ -12,8 +12,10 @@ Horários CET (Europe/Madrid, somente Czech Liga Pro):
       Às hh:55 o bot pega na página de jogos (fixtures) do ScoreMondo os confrontos
       da 2ª rodada (jogos que começam entre hh+1:00 e hh+1:50), confirma os
       resultados da 1ª rodada na página de resultados do ScoreMondo, aplica o filtro
-      (histórico da 1ª rodada + odds, se houver chave do MoviOdds) e envia UMA mensagem
-      com todas as entradas verdes da rodada.
+      (histórico da 1ª rodada + odds, se houver chave do MoviOdds) e envia a mensagem
+      com as entradas verdes e o motivo de cada jogo da 2ª rodada que ficou de fora.
+      Acima de 4096 caracteres, a lista de fora é cortada ("… e mais N jogos") ou a
+      mensagem é dividida em mais de um envio.
   2ª Rodada (fallback ao vivo): 09:00 / 09:30 → 13:00 / 13:30 → 17:00 / 17:30 → 21:00 / 21:30
       Só sinaliza confrontos que não foram avaliados às hh:55 (sem duplicar).
 
@@ -877,6 +879,57 @@ def classificar(sf: int, sc: int) -> str:
         return "derrota"
     return "nao"
 
+def _html(nome: str) -> str:
+    """Escapa nome de jogador para o parse_mode HTML do Telegram."""
+    return html.escape(" ".join(str(nome or "").split()), quote=False)
+
+def _rotulo(nome: str, outro: str) -> str:
+    """Primeiro nome, ou o nome inteiro se os dois jogadores compartilham o primeiro."""
+    def prim(n: str) -> str:
+        partes = str(n or "").split()
+        return partes[0] if partes else ""
+    a, b = prim(nome), prim(outro)
+    if a and a.casefold() == b.casefold():
+        return _html(nome)
+    return _html(a or nome)
+
+def _placar(entry: Optional[dict]) -> Optional[str]:
+    if not entry:
+        return None
+    sf, sc = entry.get("sets_favor"), entry.get("sets_contra")
+    if sf is None or sc is None:
+        return None
+    return f"{sf}-{sc}"
+
+def _frase_r1(nome: str, entry: Optional[dict], outro: str) -> str:
+    """'Jan venceu 3-1' / 'Petr perdeu 1-3' / 'venceu 3-2', com o nome escapado."""
+    rot = _rotulo(nome, outro)
+    if not entry:
+        return rot
+    res = entry.get("resultado") or ""
+    if res in ("limpo", "desgaste"):
+        verbo = "venceu"
+    elif res == "derrota":
+        verbo = "perdeu"
+    else:
+        verbo = ""
+    placar = _placar(entry)
+    if verbo and placar:
+        return f"{rot} {verbo} {placar}"
+    if verbo:
+        return f"{rot} {verbo}"
+    if placar:
+        return f"{rot} {placar}"
+    return rot
+
+def _resumo_r1(n1: str, h1: Optional[dict], n2: str, h2: Optional[dict]) -> str:
+    partes = []
+    if h1:
+        partes.append(_frase_r1(n1, h1, n2))
+    if h2:
+        partes.append(_frase_r1(n2, h2, n1))
+    return ", ".join(partes)
+
 def avaliar(m, hist: Historico, odds_map: Dict[str, OddsMatch]) -> Tuple[str, List[str], Optional[str]]:
     """Aplica as regras a qualquer objeto com .player1 e .player2 (LiveMatch ou OddsMatch)."""
     return avaliar_par(m.player1, m.player2, hist, odds_map, kickoff=getattr(m, "kickoff", None))
@@ -887,19 +940,21 @@ def avaliar_par(player1: str, player2: str, hist: Historico,
     h1 = hist.get(player1)
     h2 = hist.get(player2)
     if not h1 or not h2:
-        return "indefinido", ["Histórico incompleto"], None
+        faltam = [n for n, h in ((player1, h1), (player2, h2)) if not h]
+        quem = " e ".join(_html(n) for n in faltam)
+        return "indefinido", [f"sem placar da 1ª rodada de {quem}"], None
 
-    motivos = ["✓ Histórico 1ª rodada presente"]
+    r1 = _resumo_r1(player1, h1, player2, h2)
 
     v1 = h1["resultado"] in ("limpo", "desgaste")
     v2 = h2["resultado"] in ("limpo", "desgaste")
     if v1 and v2:
-        return "bloqueado", ["Duelo de Vencedores (Regra 2)"], None
+        return "bloqueado", [f"Duelo de Vencedores (Regra 2): {r1}"], None
     if h1["resultado"] == "derrota" and h2["resultado"] == "derrota":
-        return "bloqueado", ["Duelo de Perdedores (Regra 3)"], None
+        return "bloqueado", [f"Duelo de Perdedores (Regra 3): {r1}"], None
 
     if not _r1_no_ciclo(h1, kickoff) or not _r1_no_ciclo(h2, kickoff):
-        return "bloqueado", ["1ª rodada fora de hh:00–hh:50 do ciclo"], None
+        return "bloqueado", [f"1ª rodada fora de hh:00–hh:50 do ciclo: {r1}"], None
 
     # Favorito só pelas odds pré-jogo DESTE confronto (2ª rodada).
     # A odd gravada na 1ª rodada é contra outro adversário e não entra na conta.
@@ -912,9 +967,11 @@ def avaliar_par(player1: str, player2: str, hist: Historico,
         odd1, odd2 = om.odd_away, om.odd_home
 
     if not odd1 or not odd2:
-        return "bloqueado", ["sem odds de mercado"], None
+        return "bloqueado", [f"sem odds de mercado: {r1}" if r1 else "sem odds de mercado"], None
     if odd1 == odd2 or min(odd1, odd2) > ODD_MAX_FAVORITO:
-        return "bloqueado", ["Odds ≈ 50/50 (Regra 5)"], None
+        return "bloqueado", [
+            f"odds {odd1:.2f} x {odd2:.2f}, sem favorito claro (máx {ODD_MAX_FAVORITO:.2f}): {r1}"
+        ], None
     if odd1 < odd2:
         fav_nome, und_nome, fav, und = player1, player2, h1, h2
         odd_fav = odd1
@@ -922,21 +979,35 @@ def avaliar_par(player1: str, player2: str, hist: Historico,
         fav_nome, und_nome, fav, und = player2, player1, h2, h1
         odd_fav = odd2
 
+    und_txt = _frase_r1(und_nome, und, fav_nome)
     if fav["resultado"] == "derrota":
-        return "bloqueado", [f"Inversão: favorito ({fav_nome}) perdeu na 1ª (Regra 4)"], None
+        placar = _placar(fav)
+        det = f"perdeu {placar} na 1ª" if placar else "perdeu na 1ª"
+        return "bloqueado", [
+            f"Inversão: favorito {_rotulo(fav_nome, und_nome)} ({odd_fav:.2f}) {det} (Regra 4): {und_txt}"
+        ], None
     if fav["resultado"] == "desgaste":
-        return "bloqueado", [f"Favorito ({fav_nome}) veio de 3-2 (Regra 5)"], None
+        return "bloqueado", [
+            f"Favorito ({_rotulo(fav_nome, und_nome)}) veio de 3-2 (Regra 5): {r1}"
+        ], None
     if fav["resultado"] != "limpo":
-        return "bloqueado", [f"Favorito ({fav_nome}) não veio de vitória limpa"], None
+        return "bloqueado", [
+            f"Favorito ({_rotulo(fav_nome, und_nome)}) não veio de vitória limpa: {r1}"
+        ], None
     if und["resultado"] != "derrota":
-        return "bloqueado", [f"Adversário ({und_nome}) não veio de derrota"], None
+        return "bloqueado", [
+            f"Adversário ({_rotulo(und_nome, fav_nome)}) não veio de derrota: {r1}"
+        ], None
 
-    motivos.extend([
-        f"✓ Favorito: <b>{fav_nome}</b>" + (f" (odd {odd_fav:.2f})" if odd_fav else ""),
-        "✓ Vitória limpa na 1ª rodada",
-        f"✓ Adversário veio de derrota ({und_nome})",
-        "✓ Sem 50/50 e sem 3-2"
-    ])
+    fav_txt = _frase_r1(fav_nome, fav, und_nome)
+    motivos = [
+        "✓ Histórico 1ª rodada presente",
+        f"✓ Favorito: <b>{_html(fav_nome)}</b>" + (f" (odd {odd_fav:.2f})" if odd_fav else ""),
+        f"✓ Vitória limpa na 1ª rodada ({fav_txt})",
+        f"✓ Adversário veio de derrota ({und_txt})",
+        "✓ Sem 50/50 e sem 3-2",
+        f"✓ Odds: {_html(player1)} {odd1:.2f} x {_html(player2)} {odd2:.2f}",
+    ]
     return "verde", motivos, fav_nome
 
 def montar_odds_map(odds_list: List[OddsMatch]) -> Dict[str, OddsMatch]:
@@ -946,50 +1017,219 @@ def montar_odds_map(odds_list: List[OddsMatch]) -> Dict[str, OddsMatch]:
 # ENTRADA hh:55 (pré-jogo, 2ª rodada)
 # ══════════════════════════════════════════════════════════════════════════════
 
+# sendMessage do Telegram recusa texto acima de 4096 unidades UTF-16.
+TG_LIMITE = 4096
+
+def _tamanho_tg(texto: str) -> int:
+    return len(texto.encode("utf-16-le")) // 2
+
+def _unir_partes(cab: str, secoes: List[str], rodape: str) -> str:
+    pedacos = [cab.rstrip("\n")]
+    pedacos.extend(s for s in secoes if s)
+    if rodape:
+        pedacos.append(rodape)
+    return "\n\n".join(pedacos)
+
+def _montar_miolo(blocos: List[str], total: int, aviso: str, linhas: List[str], omitidos: int,
+                  cab: str, rodape: str) -> str:
+    secoes = []
+    if blocos:
+        secoes.append(f"<b>SINAL VERDE</b> — {total} entrada(s):\n\n" + "\n\n".join(blocos))
+    if aviso:
+        secoes.append(aviso)
+    if linhas or omitidos:
+        total_sem = len(linhas) + omitidos
+        corpo = list(linhas)
+        if omitidos:
+            corpo.append(f"… e mais {omitidos} jogos")
+        rotulo = "1 jogo" if total_sem == 1 else f"{total_sem} jogos"
+        secoes.append(f"<b>Sem entrada</b> — {rotulo}:\n" + "\n".join(corpo))
+    return _unir_partes(cab, secoes, rodape)
+
+def _max_linhas(blocos: List[str], total: int, aviso: str, linhas: List[str],
+                cab: str, rodape: str, limite: int) -> int:
+    """Quantas linhas de fora cabem. -1 se nem o aviso de corte cabe."""
+    def montado(qtd: int) -> str:
+        return _montar_miolo(blocos, total, aviso, linhas[:qtd], len(linhas) - qtd, cab, rodape)
+
+    if _tamanho_tg(montado(len(linhas))) <= limite:
+        return len(linhas)
+    if not linhas or _tamanho_tg(montado(0)) > limite:
+        return -1
+    lo, hi, melhor = 0, len(linhas) - 1, 0
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if _tamanho_tg(montado(mid)) <= limite:
+            melhor = mid
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return melhor
+
+def _cortar_para(texto: str, limite: int) -> str:
+    if limite <= 0:
+        return ""
+    if _tamanho_tg(texto) <= limite:
+        return texto
+    nota = "…"
+    orcamento = limite - _tamanho_tg(nota)
+    if orcamento <= 0:
+        return nota if _tamanho_tg(nota) <= limite else ""
+    chars: List[str] = []
+    usado = 0
+    ultimo_seguro = 0
+    for ch in texto:
+        t = _tamanho_tg(ch)
+        if usado + t > orcamento:
+            break
+        chars.append(ch)
+        usado += t
+        if ch in " \n;>":
+            ultimo_seguro = len(chars)
+    if ultimo_seguro:
+        chars = chars[:ultimo_seguro]
+    base = "".join(chars).rstrip()
+    amp = base.rfind("&")
+    if amp != -1 and ";" not in base[amp:]:
+        base = base[:amp].rstrip()
+    if base.count("<b>") > base.count("</b>"):
+        base = base[:base.rfind("<b>")].rstrip()
+    if base.count("<") > base.count(">"):
+        base = base[:base.rfind("<")].rstrip()
+    return base + nota
+
+def _partir_telegram(texto: str, limite: int = TG_LIMITE) -> List[str]:
+    """Divide em envios de no máximo `limite` unidades UTF-16, sem cortar no meio de uma tag."""
+    if not texto:
+        return []
+    if _tamanho_tg(texto) <= limite:
+        return [texto]
+    partes: List[str] = []
+    atual = ""
+    for linha in texto.split("\n"):
+        candidato = linha if not atual else atual + "\n" + linha
+        if _tamanho_tg(candidato) <= limite:
+            atual = candidato
+            continue
+        if atual:
+            partes.append(atual)
+            atual = ""
+        if _tamanho_tg(linha) <= limite:
+            atual = linha
+        else:
+            partes.append(_cortar_para(linha, limite))
+    if atual:
+        partes.append(atual)
+    return partes
+
+def _garantir_limite(texto: str, limite: int = TG_LIMITE) -> List[str]:
+    if _tamanho_tg(texto) <= limite:
+        return [texto] if texto else []
+    return _partir_telegram(texto, limite)
+
+def _empacotar_entrada(cab: str, blocos: List[str], aviso: str, linhas: List[str],
+                       rodape: str, limite: int = TG_LIMITE) -> List[str]:
+    """Uma mensagem se couber. Senão corta a lista de fora; se os verdes não cabem, divide."""
+    total = len(blocos)
+    grupos: List[List[str]] = []
+    atual: List[str] = []
+    for bloco in blocos:
+        tentativa = atual + [bloco]
+        texto = _montar_miolo(tentativa, total, "", [], 0, cab, rodape)
+        if atual and _tamanho_tg(texto) > limite:
+            grupos.append(atual)
+            atual = [bloco]
+        else:
+            atual = tentativa
+    if atual:
+        grupos.append(atual)
+
+    if not grupos:
+        qtd = _max_linhas([], 0, aviso, linhas, cab, rodape, limite)
+        if qtd < 0:
+            return _partir_telegram(_montar_miolo([], 0, aviso, linhas, 0, cab, rodape), limite)
+        return [_montar_miolo([], 0, aviso, linhas[:max(qtd, 0)], len(linhas) - max(qtd, 0), cab, rodape)]
+
+    mensagens: List[str] = []
+    for i, grupo in enumerate(grupos):
+        ultimo = i == len(grupos) - 1
+        if not ultimo:
+            mensagens.extend(_garantir_limite(_montar_miolo(grupo, total, "", [], 0, cab, ""), limite))
+            continue
+        qtd = _max_linhas(grupo, total, "", linhas, cab, rodape, limite)
+        if qtd >= 0:
+            texto = _montar_miolo(grupo, total, "", linhas[:qtd], len(linhas) - qtd, cab, rodape)
+            mensagens.extend(_garantir_limite(texto, limite))
+        else:
+            texto = _montar_miolo(grupo, total, "", [], 0, cab, "" if linhas else rodape)
+            mensagens.extend(_garantir_limite(texto, limite))
+            if linhas:
+                qtd2 = _max_linhas([], 0, "", linhas, cab, rodape, limite)
+                if qtd2 < 0:
+                    mensagens.extend(_partir_telegram(
+                        _montar_miolo([], 0, "", linhas, 0, cab, rodape), limite))
+                else:
+                    mensagens.append(
+                        _montar_miolo([], 0, "", linhas[:qtd2], len(linhas) - qtd2, cab, rodape))
+    return [m for m in mensagens if m.strip()]
+
+def _hora_jogo(o: OddsMatch) -> str:
+    return o.kickoff.strftime("%H:%M") if o.kickoff else "—"
+
+def _bloco_verde(o: OddsMatch, fav: Optional[str], motivos: List[str]) -> str:
+    return (
+        f"🚨 <b>{_html(o.home)}</b> vs <b>{_html(o.away)}</b> ({_hora_jogo(o)})\n"
+        f"👉 Entrada: <b>{_html(fav or '')}</b>\n" + "\n".join(motivos)
+    )
+
+def _linha_sem_entrada(o: OddsMatch, status: str, motivos: List[str]) -> str:
+    marca = "⏳" if status == "indefinido" else "❌"
+    motivo = "; ".join(motivos) if motivos else status
+    return f"{marca} <b>{_html(o.home)}</b> vs <b>{_html(o.away)}</b> ({_hora_jogo(o)}) — {motivo}"
+
 def montar_mensagem_entrada(slot_key: str, confrontos: List[OddsMatch], hist: Historico,
-                            odds_list: List[OddsMatch]) -> Tuple[str, List[OddsMatch], List[OddsMatch]]:
-    """Retorna (texto, verdes, avaliados_definitivos)."""
+                            odds_list: List[OddsMatch]) -> Tuple[List[str], list, List[OddsMatch]]:
+    """Retorna (textos, verdes, avaliados_definitivos). Cada texto cabe no Telegram."""
     odds_map = montar_odds_map(odds_list)
     ini, fim = janela_rodada2(slot_key)
     hora = slot_key.split("|")[1]
-    cab = f"🎯 <b>ENTRADA {hora}</b> — 2ª Rodada {ini.strftime('%H:%M')}/{(ini + timedelta(minutes=30)).strftime('%H:%M')} CET\n"
+    cab = (f"🎯 <b>ENTRADA {hora}</b> — 2ª Rodada "
+           f"{ini.strftime('%H:%M')}/{(ini + timedelta(minutes=30)).strftime('%H:%M')} CET")
 
     if not confrontos:
-        return (cab + "\nNenhuma entrada: confrontos da 2ª rodada ainda não disponíveis.\n"
-                "O filtro ao vivo continua ativo durante a 2ª rodada."), [], []
+        texto = (cab + "\n\nNenhuma entrada: confrontos da 2ª rodada ainda não disponíveis.\n"
+                 "O filtro ao vivo continua ativo durante a 2ª rodada.")
+        return [texto], [], []
 
-    verdes, definitivos, blocos = [], [], []
+    verdes, definitivos, blocos, linhas = [], [], [], []
     for o in confrontos:
         status, motivos, fav = avaliar(o, hist, odds_map)
         if status in ("verde", "bloqueado"):
             definitivos.append(o)
-        if status != "verde":
-            continue
-        verdes.append((o, fav))
-        odds_txt = ""
-        if o.odd_home and o.odd_away:
-            odds_txt = f"\nOdds: {o.home} {o.odd_home:.2f} · {o.away} {o.odd_away:.2f}"
-        hk = o.kickoff.strftime("%H:%M") if o.kickoff else "—"
-        blocos.append(
-            f"🚨 <b>{o.home}</b> vs <b>{o.away}</b> ({hk})\n"
-            f"👉 Entrada: <b>{fav}</b>{odds_txt}\n" + "\n".join(motivos)
-        )
+        if status == "verde":
+            verdes.append((o, fav))
+            blocos.append(_bloco_verde(o, fav, motivos))
+        else:
+            linhas.append(_linha_sem_entrada(o, status, motivos))
 
-    if not verdes:
-        return cab + f"\nNenhuma entrada verde ({len(confrontos)} confrontos avaliados).", [], definitivos
-    texto = (cab + f"\n<b>SINAL VERDE</b> — {len(verdes)} entrada(s):\n\n" + "\n\n".join(blocos)
-             + f"\n\n⏰ {agora_cet().strftime('%H:%M:%S')} CET")
-    return texto, verdes, definitivos
+    aviso = "" if verdes else f"Nenhuma entrada verde ({len(confrontos)} confrontos avaliados)."
+    rodape = f"⏰ {agora_cet().strftime('%H:%M:%S')} CET"
+    textos = _empacotar_entrada(cab, blocos, aviso, linhas, rodape)
+    return textos, verdes, definitivos
 
 def processar_entrada(slot_key: str, hist: Historico, sinais: CacheSet, entradas: CacheSet,
                       tg: Telegram, odds_list: List[OddsMatch], apostas: "Apostas" = None) -> bool:
     if entradas.has(slot_key):
         return False
     confrontos = confrontos_rodada2(odds_list, slot_key)
-    texto, verdes, definitivos = montar_mensagem_entrada(slot_key, confrontos, hist, odds_list)
-    if not tg.send(texto):
+    textos, verdes, definitivos = montar_mensagem_entrada(slot_key, confrontos, hist, odds_list)
+    if not textos:
         log.error(f"[ENTRADA {slot_key}] falha ao enviar — tenta de novo no próximo ciclo")
         return False
+    for texto in textos:
+        if not tg.send(texto):
+            log.error(f"[ENTRADA {slot_key}] falha ao enviar — tenta de novo no próximo ciclo")
+            return False
     entradas.add(slot_key)
     dia = slot_key.split("|")[0]
     for o in definitivos:   # verdes e bloqueados: o ao vivo não reavalia
@@ -1049,13 +1289,14 @@ def processar(matches: List[LiveMatch], hist: Historico, finished: CacheSet,
             if status == "verde":
                 texto = (
                     f"🚨 <b>SINAL VERDE</b> (ao vivo)\n\n"
-                    f"<b>{m.player1}</b> vs <b>{m.player2}</b>\n"
-                    f"👉 Entrada: <b>{fav}</b>\n"
+                    f"<b>{_html(m.player1)}</b> vs <b>{_html(m.player2)}</b>\n"
+                    f"👉 Entrada: <b>{_html(fav or '')}</b>\n"
                     f"Placar: {m.score1 if m.score1 is not None else '-'} : {m.score2 if m.score2 is not None else '-'} ({m.current_set or '—'})\n\n"
                     + "\n".join(motivos) +
                     f"\n\n⏰ {agora_cet().strftime('%H:%M:%S')} CET"
                 )
-                if tg.send(texto):
+                partes = _partir_telegram(texto)
+                if partes and all(tg.send(p) for p in partes):
                     sinais.add(key_s)
                     if apostas is not None:
                         apostas.add(m.player1, m.player2, fav, f"{agora_cet().hour:02d}", "ao_vivo")
