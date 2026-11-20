@@ -1,9 +1,10 @@
 # Bot Filtro Blindado — Czech Liga Pro (v5)
 
 Bot de Telegram que analisa **somente a Czech Liga Pro** (tênis de mesa), 24 horas,
-madrugada inclusive. Em todo **hh:55 (CET)** avalia os jogos da hora seguinte. Se houver
-jogos e nenhum passar, a mensagem diz `Entrada: NENHUMA — sem desnível claro nesta rodada`.
-Hora sem jogos da liga não gera mensagem. GREEN/RED, resumo diário às 22:30, saudações
+madrugada inclusive. A entrada sai **cerca de 5 minutos antes de cada bloco de início**
+(:00, :30 ou qualquer outro minuto), em qualquer modo. Se o bloco tiver jogos e nenhum
+passar, a mensagem diz `Entrada: NENHUMA — sem desnível claro nesta rodada`.
+Bloco sem jogos da liga não gera mensagem. GREEN/RED, resumo diário às 22:30, saudações
 e comandos (/placar /semana /mes /entradas /ajuda /id) continuam iguais.
 
 Fontes: ScoreMondo (jogos, placar ao vivo e resultados — páginas públicas) e MoviOdds
@@ -19,7 +20,7 @@ Para sinalizar, as condições valem juntas:
 2. Pelo menos 2 vitórias limpas (3-0 ou 3-1). Uma vitória 3-2 é alerta amarelo e bloqueia.
    Com só 1 vitória limpa, a entrada espera (`⏳ … precisa de 2`).
 3. O adversário tem pelo menos uma derrota feia hoje (0-3 ou 1-3).
-4. Se ninguém passar, o hh:55 diz `Entrada: NENHUMA` e lista o motivo de cada jogo.
+4. Se ninguém passar, o bloco diz `Entrada: NENHUMA` e lista o motivo de cada jogo.
 
 Os vetos de vencedor x vencedor e perdedor x perdedor continuam. Sem odds, ou com cache
 de odds acima de 20 minutos, não há entrada. Os resultados do dia vêm do MoviOdds
@@ -27,26 +28,28 @@ de odds acima de 20 minutos, não há entrada. Os resultados do dia vêm do Movi
 
 ## Odds e resultados (MoviOdds)
 
-São **160 consultas por dia** (odds + resultados), **4.960 em 31 dias**, abaixo de 5.000.
-A grade cobre as 24 horas. 07:48 continua, mas a primeira consulta do dia é **00:10**.
+São **160 consultas por dia** na grade (odds + resultados), **4.960 em 31 dias**, abaixo de 5.000.
+Uma consulta de odds traz todos os jogos futuros, então odds saem a cada 15 minutos.
+A primeira do dia é **00:00**.
 
-| Por hora | Minutos | Tipo |
+| Por hora | Minutos | Chamadas |
 |---|---|---|
-| Resultados | :10, :30, :48 e, em 16 horas, :20 | forma do dia |
-| Odds antes do envio | :40 e :52 (cache &lt; 20 min no :55) | odds |
-| Entrada | :55 | odds |
+| Odds | :00, :15, :30, :45 | 96 |
+| Resultados | :10 e :40; :22 nas horas em que `hora % 3 != 2` | 64 |
 
-72 odds + 88 resultados = 160. Nos outros minutos o cache vale. Se a API falha, o mesmo
-slot tenta de novo depois de cerca de 60 segundos (no máximo 2).
+96 + 64 = 160. No envio (~5 min antes do apito) o cache de odds tem no máximo 13 minutos,
+abaixo dos 20. Nos outros minutos o cache vale. Se a API falha, o mesmo slot tenta de
+novo depois de cerca de 60 segundos (no máximo 2).
 
-Cada slot (`YYYY-MM-DD|HH:MM`) é consultado uma vez. Se a resposta vier vazia por erro
-da API, o mesmo slot tem uma nova tentativa depois de cerca de 60 segundos (no máximo
-2). Uma lista vazia sem erro, ou a falta de chave, não é tentada de novo. As odds ficam
-em cache até o próximo slot de odds (no máximo 20 minutos) e alimentam a entrada,
-inclusive as retentativas das hh:55–hh:59. Os resultados finalizados acumulam em
-`forma_dia_v5.json`. A grade está em `agenda_moviodds()` (também `MOVIODDS_MINUTOS_ODDS`
-e `MOVIODDS_MINUTOS_RESULTADOS`). Cada consulta grava `INFO`:
+O cache de odds fica em `DATA_DIR` (`odds_cache_v5.json`). No reinício, uma lista com
+menos de 20 minutos é reaproveitada. Sem odds frescas e com jogo começando em até 30
+minutos, o bot faz **uma** consulta imediata naquele dia (o teste do dia aceita ≤161).
+
+Cada slot (`YYYY-MM-DD|HH:MM`) da grade é consultado uma vez. Uma lista vazia sem erro,
+ou a falta de chave, não é tentada de novo. Os resultados finalizados acumulam em
+`forma_dia_v5.json`. A grade está em `agenda_moviodds()`. Cada consulta grava `INFO`:
 `[ODDS] consulta HH:MM -> N jogos` ou `[RESULTADOS] consulta HH:MM -> N jogos`.
+Cada bloco grava `[ENTRADA YYYY-MM-DD|HH:MM] N jogos avaliados, X aprovados`.
 
 ## Resultados anteriores (SportsAPI365)
 
@@ -63,7 +66,7 @@ contador fica em `DATA_DIR/sportsapi365_contador.json` e também obedece
 desliga a fonte até o reset. A chave não entra no código nem no log. Não há consulta
 por jogo nem por jogador: a mensagem lê só o cache.
 
-Na mensagem das hh:55, nos aprovados e na lista "Sem entrada", cada jogador com
+Na mensagem de cada bloco, nos aprovados e na lista "Sem entrada", cada jogador com
 casamento único de nome ganha:
 
 `<b>Nome</b> — Histórico 7d: X V / Y D (Z% limpas)`

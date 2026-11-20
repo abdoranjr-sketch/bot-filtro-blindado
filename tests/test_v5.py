@@ -41,10 +41,10 @@ par_verde(hist, "C Gama", "D Delta", K(8, 0))
 par_verde(hist, "E Eps", "F Fi", K(8, 0))
 fx = [b.OddsMatch("A Alfa","B Beta",1.50,2.50,False,None,K(9,0)),
       b.OddsMatch("D Delta","C Gama",2.50,1.50,False,None,K(9,0)),
-      b.OddsMatch("E Eps","F Fi",1.50,2.50,False,None,K(9,30))]
+      b.OddsMatch("E Eps","F Fi",1.50,2.50,False,None,K(9,0))]
 tg = FakeTG(); ap = b.Apostas(b.APOSTAS_FILE)
 sinais, entradas = b.CacheSet(b.ENVIADOS_FILE), b.CacheSet(b.ENTRADAS_FILE)
-b.processar_entrada("2026-11-20|08:55", hist, sinais, entradas, tg, fx, ap)
+b.processar_entrada("2026-11-20|09:00", hist, sinais, entradas, tg, fx, ap)
 check(len(tg.sent) == 1 and tg.sent[0][0] == "-100999", "entrada no grupo")
 check(len(ap.itens) == 3 and all(a["bloco"] == "09" and a["status"] == "pendente" for a in ap.itens), ap.itens)
 check(ap.get(b.chave_sinal("C Gama","D Delta","2026-11-20"))["pick"] == "C Gama", "pick")
@@ -69,19 +69,19 @@ check(len(tg.sent) == 4, "4 msgs")
 # ---------- 3. reinício: sem duplicar
 ap2 = b.Apostas(b.APOSTAS_FILE)
 check(b.notificar_resultados(ap2, tg) == 0 and b.resolver_apostas(ap2, res) == 0, "restart no dup")
-b.processar_entrada("2026-11-20|08:55", hist, sinais, b.CacheSet(b.ENTRADAS_FILE), tg, fx, ap2)
+b.processar_entrada("2026-11-20|09:00", hist, sinais, b.CacheSet(b.ENTRADAS_FILE), tg, fx, ap2)
 check(len(tg.sent) == 4 and len(ap2.itens) == 3, "entrada não reenviada")
 
 # ---------- 4. falha de envio → tenta de novo
 at(2026,11,20,16,55,3)
 par_verde(hist, "G Gi", "H Ha", K(16, 0))
-b.processar_entrada("2026-11-20|16:55", hist, sinais, entradas, tg, [b.OddsMatch("G Gi","H Ha",1.50,2.50,False,None,K(17,0))], ap2)
+b.processar_entrada("2026-11-20|17:00", hist, sinais, entradas, tg, [b.OddsMatch("G Gi","H Ha",1.50,2.50,False,None,K(17,0))], ap2)
 at(2026,11,20,17,30); b.resolver_apostas(ap2, [R("H Ha","G Gi",1,3,K(17,0),"9")])
 bad = FakeTG(ok=False); check(b.notificar_resultados(ap2, bad) == 0, "falhou")
 check(b.notificar_resultados(b.Apostas(b.APOSTAS_FILE), tg) == 1 and "GREEN" in tg.texts()[-1], "reenviou após falha")
 
 # ---------- 5. entrada ao vivo + resolução pela página ao vivo
-at(2026,11,20,21,10)
+at(2026,11,20,21,29)
 par_verde(hist, "I Io", "J Jo", K(20, 0))
 ap3 = b.Apostas(b.APOSTAS_FILE)
 b.processar([b.LiveMatch("J Jo","I Io",None,None,None,False,K(21,30))], hist, b.CacheSet(b.FINISHED_FILE), sinais, tg, "R2",

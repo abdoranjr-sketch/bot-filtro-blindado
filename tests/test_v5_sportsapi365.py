@@ -559,8 +559,8 @@ check("H2H: favorito perdeu os 2 últimos" not in partes_um[0], partes_um[0])
 check("H2H 14d: 0 x 1" in partes_um[0], partes_um[0])
 check("Histórico 7d: 3 V / 1 D (50% limpas)" in partes_um[0], partes_um[0])
 
-# ao vivo: o bloqueio vale, a linha de histórico não (ela é só das hh:55)
-b.agora_cet = lambda: K(9, 10)
+# ao vivo: o bloqueio vale, a linha de histórico não (ela é só do bloco)
+b.agora_cet = lambda: K(9, 29)
 
 
 class FakeTG:
@@ -576,7 +576,7 @@ tg = FakeTG()
 sinais = b.CacheSet(Path(tempfile.mkdtemp()) / "sinais.json")
 b.processar(
     [
-        b.LiveMatch("Petr Svoboda", "Jan Novak", None, None, None, False, K(9, 20)),
+        b.LiveMatch("Petr Svoboda", "Jan Novak", None, None, None, False, K(9, 30)),
         b.LiveMatch("Ivan Hora", "Adam Kral", None, None, None, False, K(9, 30)),
     ],
     hh, b.CacheSet(Path(tempfile.mkdtemp()) / "fin.json"), sinais, tg, "R2",
@@ -589,7 +589,7 @@ check("Petr Svoboda" not in tg.sent[0], tg.sent[0])
 
 tg2 = FakeTG()
 b.processar(
-    [b.LiveMatch("Petr Svoboda", "Jan Novak", None, None, None, False, K(9, 20))],
+    [b.LiveMatch("Petr Svoboda", "Jan Novak", None, None, None, False, K(9, 30))],
     hh, b.CacheSet(Path(tempfile.mkdtemp()) / "fin2.json"),
     b.CacheSet(Path(tempfile.mkdtemp()) / "sinais2.json"), tg2, "R2", [h2h_block],
 )
