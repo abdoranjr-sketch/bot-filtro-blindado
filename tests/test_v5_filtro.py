@@ -191,7 +191,7 @@ check(h.get("A Alfa")["inicio"].startswith("2026-11-20T08:30:00"), h.get("A Alfa
 check(h.get("C Gama") is None and h.get("E Eps") is None, h.data)
 check(tg.sent == [], tg.sent)
 
-at(9, 29)
+at(9, 25)
 h.definir_jogos("Petr", [
     {"resultado": "limpo", "sets_favor": 3, "sets_contra": 0, "inicio": K(8, 0)},
     {"resultado": "limpo", "sets_favor": 3, "sets_contra": 1, "inicio": K(8, 20)},
@@ -199,23 +199,26 @@ h.definir_jogos("Petr", [
 h.definir_jogos("Jan", [{"resultado": "derrota", "sets_favor": 1, "sets_contra": 3, "inicio": K(8, 30)}])
 ap = b.Apostas(b.APOSTAS_FILE)
 antes = len(ap.itens)
-futuro = b.LiveMatch("Petr", "Jan", None, None, None, False, K(9, 30))
-comecou = b.LiveMatch("A Alfa", "B Beta", 0, 1, "S2", False, K(9, 0))
-sem_hora = b.LiveMatch("C Gama", "D Delta", None, None, None, False, None)
 odds = [
     jogo("Petr", "Jan", 1.50, 2.50, 9, 30),
     jogo("A Alfa", "B Beta", 1.40, 2.80, 9, 0),
     b.OddsMatch("C Gama", "D Delta", 1.40, 2.60, True, None, K(9, 30)),
 ]
-b.processar([futuro, comecou, sem_hora, b.LiveMatch("C Gama", "D Delta", None, None, None, False, K(9, 30))],
-            h, fin, sinais, tg, "R2", odds, ap)
+b.processar_entrada("2026-11-20|09:30", h, sinais, b.CacheSet(b.Path(D) / "entradas_r2.json"), tg, odds, ap)
 check(len(ap.itens) == antes + 1, ap.itens)
 entrada = ap.get(b.chave_sinal("Petr", "Jan", "2026-11-20"))
-check(entrada and entrada["pick"] == "Petr" and entrada["origem"] == "ao_vivo", entrada)
+check(entrada and entrada["pick"] == "Petr" and entrada["origem"] == "30", entrada)
 check(ap.get(b.chave_sinal("A Alfa", "B Beta", "2026-11-20")) is None, "jogo já iniciado")
 check(ap.get(b.chave_sinal("C Gama", "D Delta", "2026-11-20")) is None, "sem hora ou odd ao vivo")
+at(9, 29)
+tg_fb = FakeTG()
+b.processar(
+    [b.LiveMatch("Petr", "Jan", None, None, None, False, K(9, 30))],
+    h, fin, b.CacheSet(b.ENVIADOS_FILE), tg_fb, "R2", odds, ap,
+)
+check(tg_fb.sent == [], tg_fb.sent)
 
-# ---------- grade: 160/dia, odds a cada 15 min, primeira às 00:00 ----------
+# ---------- grade: 144/dia, odds a cada 15 min, primeira às 00:00 ----------
 slots = []
 for hora in range(24):
     for minuto in range(60):
@@ -225,14 +228,14 @@ for hora in range(24):
         elif b.slot_moviodds_atual(quando):
             slots.append((hora, minuto, "odds"))
 check(slots[0] == (0, 0, "odds"), slots[0])
-check(b.MOVIODDS_CHAMADAS_DIA == 160 and b.MOVIODDS_CHAMADAS_DIA <= 161, b.MOVIODDS_CHAMADAS_DIA)
-check(b.MOVIODDS_CHAMADAS_MES_31 == 4960 and b.MOVIODDS_CHAMADAS_MES_31 < 5000, b.MOVIODDS_CHAMADAS_MES_31)
+check(b.MOVIODDS_CHAMADAS_DIA == 144 and b.MOVIODDS_CHAMADAS_DIA <= 160, b.MOVIODDS_CHAMADAS_DIA)
+check(b.MOVIODDS_CHAMADAS_MES_31 == 4464 and b.MOVIODDS_CHAMADAS_MES_31 < 5000, b.MOVIODDS_CHAMADAS_MES_31)
 check(len(slots) == b.MOVIODDS_CHAMADAS_DIA, len(slots))
 check(len({(h, m) for h, m, _ in slots}) == len(slots), "um minuto, uma chamada")
 for h in range(24):
     check((h, 0, "odds") in slots and (h, 15, "odds") in slots, h)
     check((h, 30, "odds") in slots and (h, 45, "odds") in slots, h)
-    check((h, 10, "resultados") in slots and (h, 40, "resultados") in slots, h)
+    check((h, 23, "resultados") in slots and (h, 53, "resultados") in slots, h)
 
 # ---------- motivos com placar, odds e jogos que ficaram de fora ----------
 def tlen(s):
@@ -299,33 +302,29 @@ partes, verdes_msg, defs = b.montar_mensagem_entrada(
 )
 check(len(partes) == 1 and all(tlen(p) <= b.TG_LIMITE for p in partes), [tlen(p) for p in partes])
 msg = partes[0]
-check(msg == "09:00 — Petr Svoboda x Jan Novak\nEntrada: <b>Petr Svoboda</b> @ 1.50", msg)
+check(msg == "09:00 — Petr Svoboda vs Jan Novak | Entrada: Petr Svoboda @ 1.50", msg)
 check("score_forma" not in msg and "Histórico" not in msg and "Ivan Hora" not in msg, msg)
 check("Sem &" not in msg and "Tom" not in msg, msg)
-escapado = b._texto_entrada("09:40", "Tom & Jerry", "A < B", 1.70)
+escapado = b._texto_entrada("09:40", "Tom & Jerry", "A < B", "Tom & Jerry", 1.70)
 check("Tom &amp; Jerry" in escapado and "A &lt; B" in escapado, escapado)
 check("Tom & Jerry" not in escapado and "A < B" not in escapado, escapado)
 check(any(o.home == "Ivan Hora" for o in defs) and any(o.home == "Sem & Placar" for o in defs) is False, defs)
 check(len(verdes_msg) == 1 and verdes_msg[0][1] == "Petr Svoboda", verdes_msg)
 
-# ao vivo: o verde usa os mesmos motivos; bloqueado não gera mensagem
-at(9, 19)
+# alerta das :25: o verde entra; o bloqueado não gera linha
+at(9, 25)
 tg = FakeTG()
 sinais = b.CacheSet(b.ENVIADOS_FILE)
-b.processar(
+b.processar_entrada(
+    "2026-11-20|09:30", h, sinais, b.CacheSet(b.ENTRADAS_FILE), tg,
     [
-        b.LiveMatch("Jan Novak", "Petr Svoboda", None, None, None, False, K(9, 20)),
-        b.LiveMatch("Ivan Hora", "Adam Kral", None, None, None, False, K(9, 20)),
-    ],
-    h, b.CacheSet(b.FINISHED_FILE), sinais, tg, "R2",
-    [
-        jogo("Jan Novak", "Petr Svoboda", 2.50, 1.50, 9, 20),
+        jogo("Jan Novak", "Petr Svoboda", 2.50, 1.50, 9, 30),
         jogo("Ivan Hora", "Adam Kral", 1.40, 2.60, 9, 30),
     ],
 )
 check(len(tg.sent) == 1, tg.sent)
 ao_vivo = tg.sent[0]
-check(ao_vivo == "09:20 — Petr Svoboda x Jan Novak\nEntrada: <b>Petr Svoboda</b> @ 1.50", ao_vivo)
+check(ao_vivo == "09:30 — Jan Novak vs Petr Svoboda | Entrada: Petr Svoboda @ 1.50", ao_vivo)
 check("score_forma" not in ao_vivo and "Ivan Hora" not in ao_vivo, ao_vivo)
 check("Jan Novak" in ao_vivo, ao_vivo)
 
@@ -367,7 +366,7 @@ slot = "2026-11-20|13:00"
 tg = FakeTG()
 ok = b.processar_entrada(slot, h, b.CacheSet(b.ENVIADOS_FILE), b.CacheSet(b.ENTRADAS_FILE), tg, lista, None)
 check(ok and tg.sent == [
-    "13:00 — Verde Bom x Verde Ruim\nEntrada: <b>Verde Bom</b> @ 1.40"
+    "13:00 — Verde Bom vs Verde Ruim | Entrada: Verde Bom @ 1.40"
 ], tg.sent)
 check(all(0 < tlen(t) <= b.TG_LIMITE for t in tg.sent), [tlen(t) for t in tg.sent])
 junto = "\n".join(tg.sent)

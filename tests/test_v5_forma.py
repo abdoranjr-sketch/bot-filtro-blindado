@@ -1,6 +1,6 @@
 """Score de forma, triangulação, fadiga, horário anterior e decisão.
 
-requests é sempre simulado. A grade do MoviOdds continua em 160 consultas/dia.
+requests é sempre simulado. A grade do MoviOdds fica em 144 consultas/dia.
 """
 import os, sys, tempfile
 from datetime import datetime, timedelta
@@ -50,11 +50,11 @@ def fj(nome, partidas, agora=AGORA):
 def decidir(a, jogador_b, oa=1.50, ob=2.40, agora=AGORA, aa=False, ab=False):
     return b.decidir_entrada(a, jogador_b, oa, ob, agora, aa, ab)
 
-# ---------- a grade de 160 não muda ----------
-check(b.MOVIODDS_CHAMADAS_DIA == 160, b.MOVIODDS_CHAMADAS_DIA)
-check(b.MOVIODDS_CHAMADAS_MES_31 == 4960, b.MOVIODDS_CHAMADAS_MES_31)
+# ---------- a grade de 144 ----------
+check(b.MOVIODDS_CHAMADAS_DIA == 144, b.MOVIODDS_CHAMADAS_DIA)
+check(b.MOVIODDS_CHAMADAS_MES_31 == 4464, b.MOVIODDS_CHAMADAS_MES_31)
 check(len(b.MOVIODDS_MINUTOS_ODDS) == 96, len(b.MOVIODDS_MINUTOS_ODDS))
-check(len(b.MOVIODDS_MINUTOS_RESULTADOS) == 64, len(b.MOVIODDS_MINUTOS_RESULTADOS))
+check(len(b.MOVIODDS_MINUTOS_RESULTADOS) == 48, len(b.MOVIODDS_MINUTOS_RESULTADOS))
 check(b.ODD_MIN_ALVO == 1.25 and b.ODD_MAX_ALVO == 1.85, (b.ODD_MIN_ALVO, b.ODD_MAX_ALVO))
 check(b.ODDS_CACHE_TTL_S == 20 * 60, b.ODDS_CACHE_TTL_S)
 check(all(m not in (5, 20, 50) for _, m in b.MOVIODDS_MINUTOS_RESULTADOS), "sem cron de 5 min")
@@ -304,8 +304,8 @@ partes, verdes, defs = b.montar_mensagem_entrada(
 check(len(verdes) == 2 and verdes[0][1] == "Petr" and verdes[1][1] == "Milos", verdes)
 msg = partes[0]
 check(msg == (
-    "09:30 — Petr x Jan\nEntrada: <b>Petr</b> @ 1.55\n\n"
-    "09:30 — Milos x Adam\nEntrada: <b>Milos</b> @ 1.40"
+    "09:30 — Petr vs Jan | Entrada: Petr @ 1.55\n"
+    "09:30 — Milos vs Adam | Entrada: Milos @ 1.40"
 ), msg)
 check("score_forma" not in msg and "Gap" not in msg and "Histórico" not in msg and "H2H" not in msg, msg)
 check("Sem Dados" not in msg, msg)

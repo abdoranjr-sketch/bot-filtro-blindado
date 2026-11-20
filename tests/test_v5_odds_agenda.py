@@ -1,4 +1,4 @@
-"""Agenda do MoviOdds: 160 consultas/dia (odds a cada 15 min + resultados), cache e uma retentativa.
+"""Agenda do MoviOdds: 144 consultas/dia (odds a cada 15 min + resultados às :23/:53).
 
 requests é sempre simulado. O dia inteiro passa pelo loop de main() com o relógio no lugar.
 Jogos às :00 e às :30 geram entrada cerca de 5 min antes, em qualquer modo.
@@ -43,16 +43,16 @@ RESULTADOS = {(h, m) for h, m, k in AGENDA if k == "resultados"}
 
 check(b.MOVIODDS_MINUTOS == tuple(sorted(ODDS | RESULTADOS)), b.MOVIODDS_MINUTOS)
 check(b.MOVIODDS_MAX_TENTATIVAS == 2 and b.MOVIODDS_RETRY_S == 60, "limites da retentativa")
-check(len(AGENDA) == 160 and len(set((h, m) for h, m, _ in AGENDA)) == 160, len(AGENDA))
-check(b.MOVIODDS_CHAMADAS_DIA == 160 and b.MOVIODDS_CHAMADAS_DIA <= 161, b.MOVIODDS_CHAMADAS_DIA)
-check(b.MOVIODDS_CHAMADAS_MES_31 == 160 * 31 == 4960 and b.MOVIODDS_CHAMADAS_MES_31 < 5000,
+check(len(AGENDA) == 144 and len(set((h, m) for h, m, _ in AGENDA)) == 144, len(AGENDA))
+check(b.MOVIODDS_CHAMADAS_DIA == 144 and b.MOVIODDS_CHAMADAS_DIA <= 160, b.MOVIODDS_CHAMADAS_DIA)
+check(b.MOVIODDS_CHAMADAS_MES_31 == 144 * 31 == 4464 and b.MOVIODDS_CHAMADAS_MES_31 < 5000,
       b.MOVIODDS_CHAMADAS_MES_31)
 check({h for h, _, _ in AGENDA} == set(range(24)), "as 24 horas")
 check(AGENDA[0] == (0, 0, "odds"), AGENDA[0])
-check(len(ODDS) == 96 and len(RESULTADOS) == 64, (len(ODDS), len(RESULTADOS)))
+check(len(ODDS) == 96 and len(RESULTADOS) == 48, (len(ODDS), len(RESULTADOS)))
 for h in range(24):
     check({m for hh, m in ODDS if hh == h} == {0, 15, 30, 45}, h)
-    check((h, 10) in RESULTADOS and (h, 40) in RESULTADOS, h)
+    check((h, 23) in RESULTADOS and (h, 53) in RESULTADOS, h)
     # envio ~5 min antes de :00 e de :30: a odd mais recente tem menos de 20 min
     for minuto in (0, 30):
         envio_m = (minuto - 5) % 60
@@ -77,8 +77,8 @@ for hora in range(24):
             check(got_r == chave and got_o is None, (hora, minuto, got_o, got_r))
         else:
             check(got_o is None and got_r is None, (hora, minuto, got_o, got_r))
-check(b.slot_moviodds_atual(b.TZ.localize(datetime(2026, 11, 20, 0, 10))) is None, "00:10 é resultado")
-check(b.slot_resultados_atual(b.TZ.localize(datetime(2026, 11, 20, 0, 10))) == "2026-11-20|00:10", "00:10")
+check(b.slot_moviodds_atual(b.TZ.localize(datetime(2026, 11, 20, 0, 23))) is None, "00:23 é resultado")
+check(b.slot_resultados_atual(b.TZ.localize(datetime(2026, 11, 20, 0, 23))) == "2026-11-20|00:23", "00:23")
 check(b.slot_moviodds_atual(b.TZ.localize(datetime(2026, 11, 20, 3, 45))) == "2026-11-20|03:45", "madrugada")
 
 def response(status, payload=None, body=None):
@@ -308,7 +308,7 @@ class TG:
         self.conflitos_seguidos = 0
     def send(self, text, chat_id=None, reply_to=None):
         # falha o envio para o bloco repetir dentro da janela de ~5 min, com o mesmo cache
-        return "Sem entrada" not in text and "\nEntrada:" not in text
+        return "Sem entrada" not in text and "Entrada:" not in text
     def get_me(self):
         return {"username": "filtrobot", "id": 999}
     def get_updates(self, offset=0):
@@ -357,8 +357,8 @@ for day in (19, 20, 21):
 por_dia = {}
 for dt, _kind in esperados:
     por_dia[dt.day] = por_dia.get(dt.day, 0) + 1
-check(por_dia[20] == 160 and all(n <= 161 for n in por_dia.values()), por_dia)
-check(por_dia[20] * 31 <= 4960, por_dia)
+check(por_dia[20] == 144 and all(n <= 160 for n in por_dia.values()), por_dia)
+check(por_dia[20] * 31 <= 160 * 31, por_dia)
 
 check(len(http_dia) == len(esperados), (len(http_dia), len(esperados)))
 check([(c["quando"], "odds" if c["url"] == b.MoviOdds.URL else "resultados") for c in http_dia]
@@ -406,7 +406,7 @@ esperados_blocos = [f"2026-11-20|{h:02d}:{m:02d}" for h in range(24) for m in (0
 esperados_blocos.append("2026-11-21|00:00")
 check(set(esperados_blocos) <= set(blocos), sorted(set(esperados_blocos) - set(blocos))[:8])
 modos = {modo for _, modo, _ in ent_calls}
-check({"R2", "ENTRADA", "FORA"} <= modos, modos)
+check({"R2", "ENTRADA"} <= modos, modos)
 for slot, chamadas in blocos.items():
     if slot not in esperados_blocos:
         continue
@@ -427,10 +427,10 @@ check(any(m.startswith("[ENTRADA 2026-11-20|16:00]") for m in logs_entrada), "bl
 check(not any("sem jogos da Czech Liga Pro nesta hora" in m for _, m in cap_dia.rows), "sem o falso vazio")
 
 dia20 = [c for c in http_dia if c["quando"].day == 20]
-check(dia20[-1]["quando"].hour == 23 and dia20[-1]["quando"].minute == 45, dia20[-1]["quando"])
-check(dia20[-1]["url"] == b.MoviOdds.URL, "23:45 pede odds")
-check(any(c["quando"].hour == 2 and c["quando"].minute == 10 for c in dia20), "madrugada tem resultado")
-check(len(dia20) <= 161, len(dia20))
+check(dia20[-1]["quando"].hour == 23 and dia20[-1]["quando"].minute == 53, dia20[-1]["quando"])
+check(dia20[-1]["url"] == b.MoviOdds.RESULTS_URL, "23:53 pede resultados")
+check(any(c["quando"].hour == 2 and c["quando"].minute == 23 for c in dia20), "madrugada tem resultado")
+check(len(dia20) <= 160, len(dia20))
 check(not any("|inicio" in (c["quando"].strftime("%H:%M")) for c in http_dia), "grade não ganha consulta extra")
 
 print("ODDS AGENDA OK", N, "checks")

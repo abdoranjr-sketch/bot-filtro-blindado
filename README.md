@@ -41,22 +41,23 @@ trata esse campo como início. A lista não zera à meia-noite: guarda as últim
 
 ## Odds e resultados (MoviOdds)
 
-São **160 consultas por dia** na grade (odds + resultados), **4.960 em 31 dias**, abaixo de 5.000.
+São **144 consultas por dia** na grade (odds + resultados), **4.464 em 31 dias**, abaixo de 5.000.
 Uma consulta de odds traz todos os jogos futuros, então odds saem a cada 15 minutos.
 A primeira do dia é **00:00**.
 
 | Por hora | Minutos | Chamadas |
 |---|---|---|
 | Odds | :00, :15, :30, :45 | 96 |
-| Resultados | :10 e :40; :22 nas horas em que `hora % 3 != 2` | 64 |
+| Resultados | :23 e :53 (logo antes do alerta) | 48 |
 
-96 + 64 = 160. No envio (~5 min antes do apito) o cache de odds tem no máximo 13 minutos,
-abaixo dos 20. Nos outros minutos o cache vale. Se a API falha, o mesmo slot tenta de
+96 + 48 = 144. O alerta sai às **:25** (bloco das :30) e às **:55** (bloco das :00).
+Nesse minuto a odd tem 10 minutos, abaixo dos 20. Nos outros minutos o cache vale.
+Se a API falha, o mesmo slot tenta de
 novo depois de cerca de 60 segundos (no máximo 2).
 
 O cache de odds fica em `DATA_DIR` (`odds_cache_v5.json`). No reinício, uma lista com
 menos de 20 minutos é reaproveitada. Sem odds frescas e com jogo começando em até 30
-minutos, o bot faz **uma** consulta imediata naquele dia (o teste do dia aceita ≤161).
+minutos, o bot faz **uma** consulta imediata naquele dia (144 da grade, no máximo 145).
 
 Cada slot (`YYYY-MM-DD|HH:MM`) da grade é consultado uma vez. Uma lista vazia sem erro,
 ou a falta de chave, não é tentada de novo. Os resultados finalizados acumulam em
@@ -69,7 +70,10 @@ SportsAPI365 já gravaram, sem consulta extra. Às 00:05 Europe/Prague sai um
 resumo do dia anterior, uma vez: `Resumo DD/MM`, totais e saldo (green = odd−1,
 red = −1). Sem entradas: `Resumo DD/MM — nenhuma entrada`. Pendente não entra
 no saldo; se fechar depois, aparece no resumo seguinte.
-O jogo aprovado no Telegram mostra horário, alvo x adversário e a odd. O detalhe fica no log.
+O Telegram manda uma linha por jogo: `HH:MM — Jogador A vs Jogador B | Entrada: Alvo @ Odd`.
+Sem sinal: `HH:MM — Sem entrada`. O detalhe fica no log. A auditoria em
+`DATA_DIR/auditoria_v5.csv` recebe cada entrada e, cerca de 35 minutos depois do
+apito, o resultado GREEN ou RED com os placares já guardados.
 
 ## Resultados anteriores (SportsAPI365)
 
@@ -93,7 +97,7 @@ foram vitórias limpas (3-0 ou 3-1). Se os dois se enfrentaram nos 14 dias:
 exemplo `Zdenek Bilek`) quando não existe outro casamento possível. Sem casamento
 único, o histórico daquele jogador fica de fora.
 
-Essas linhas não vão para o Telegram e o H2H não bloqueia a entrada. As 160
+Essas linhas não vão para o Telegram e o H2H não bloqueia a entrada. As 144
 consultas do MoviOdds continuam iguais.
 
 ## Configuração (variáveis de ambiente)
@@ -110,6 +114,7 @@ Veja `.env.example`. **Nunca** coloque tokens no código nem faça commit do `.e
 | `MOVIODDS_KEY_2` | chave reserva do MoviOdds (opcional; usada por 30 min se a principal falhar) |
 | `SPORTSAPI365_KEY` | resultados anteriores (SportsAPI365 / RapidAPI, opcional). Sem ela, o bot segue igual |
 | `DATA_DIR` | pasta persistente dos dados (ex.: `/data`) |
+| `HORARIO_ANTERIOR` | `rigido` (padrão) bloqueia jogo nos 45 min anteriores; `sets` só se teve 4 ou 5 sets |
 
 ## Deploy
 Railway/Render/Fly usam o `Dockerfile` (ou `Procfile`: `worker: python bot_filtro_blindado_v5.py`).
@@ -118,7 +123,7 @@ Monte um volume em `/data`.
 ## Testes
 ```
 pip install -r requirements.txt
-python tests/test_v5.py && python tests/test_v5_discussao.py && python tests/test_v5_filtro.py && python tests/test_v5_moviodds.py && python tests/test_v5_odds_agenda.py && python tests/test_v5_sportsapi365.py && python tests/test_v5_forma.py && python tests/test_v5_resumo.py
+python tests/test_v5.py && python tests/test_v5_discussao.py && python tests/test_v5_filtro.py && python tests/test_v5_moviodds.py && python tests/test_v5_odds_agenda.py && python tests/test_v5_sportsapi365.py && python tests/test_v5_forma.py && python tests/test_v5_resumo.py && python tests/test_v5_spec.py
 ```
 
 🔞 +18 · Aposte com responsabilidade.
