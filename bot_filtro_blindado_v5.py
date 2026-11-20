@@ -21,7 +21,8 @@ MoviOdds (odds, opcional) — 92 consultas/dia (~2.760/mês), não a cada scrape
   A 1ª rodada começa em hh:00 (08, 12, 16, 20). A grade começa 12 min antes:
   (hh-1):48, (hh-1):54, depois hh:00/:06/:12/:18/:20/:24/:30/:36/:42/:48,
   hh:55 (entrada) e (hh+1):00/:06/:12/:18/:20/:24/:30/:36/:42/:48.
-  Entre esses minutos o cache vale. Se uma consulta volta vazia por erro, o
+  Entre esses minutos o cache vale por no máximo 20 minutos. Odds mais antigas
+  contam como ausentes e não geram entrada. Se uma consulta volta vazia por erro, o
   mesmo slot é tentado de novo depois de ~60 s (no máximo 2 vezes).
 
 Interativo (v5) — tudo vai para o GRUPO (TELEGRAM_GROUP_ID):
@@ -43,7 +44,7 @@ Configuração (variáveis de ambiente):
                 TELEGRAM_DISCUSSION_ID (grupo de discussão ligado ao canal: lá o bot
                 conversa, dá boas-vindas e responde /placar /semana /mes /entradas /ajuda;
                 as entradas, green/red, resumo e saudações continuam no TELEGRAM_GROUP_ID)
-  Opcionais:    MOVIODDS_KEY (odds; sem chave o filtro usa só "limpo vs derrota")
+  Opcionais:    MOVIODDS_KEY (odds; sem chave não há entrada — falta odds de mercado)
                 MOVIODDS_KEY_2 (reserva do MoviOdds, opcional: entra por 30 min se a
                 principal falhar com 401, 403, 429, 5xx ou erro de rede)
                 DATA_DIR     (pasta dos arquivos .json; padrão = pasta do script)
@@ -90,6 +91,12 @@ APOSTAS_FILE = DATA_DIR / "apostas_v5.json"      # entradas + green/red
 EVENTOS_FILE = DATA_DIR / "eventos_v5.json"      # resumo/saudações já enviados
 
 TZ = pytz.timezone("Europe/Madrid")
+
+# Favorito claro na 2ª rodada: a odd de mercado do favorito tem de ser no máximo esta.
+# 1.80/2.00 não passa (a diferença antiga de 0.15 deixava esse par entrar).
+ODD_MAX_FAVORITO = 1.65
+# Cache do MoviOdds mais velho que isto é tratado como odds ausentes.
+ODDS_CACHE_TTL_S = 20 * 60
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("FiltroV5")
@@ -225,14 +232,24 @@ def _slot_para_consultar(cache: CacheOdds, now: datetime, ts: float) -> Optional
         return ultimo
     return None
 
+def _lista_cache_vigente(cache: CacheOdds, ts: float) -> List[OddsMatch]:
+    """Lista em cache, ou [] se nunca houve consulta ou se ela tem mais de 20 min."""
+    if cache.quando is None or ts - cache.quando > ODDS_CACHE_TTL_S:
+        return []
+    return cache.lista
+
 def obter_odds(moviodds: "MoviOdds", cache: CacheOdds,
                now: Optional[datetime] = None, agora_ts: Optional[float] = None) -> List[OddsMatch]:
-    """Odds em cache. Consulta o MoviOdds só no slot agendado (no máximo 2 tentativas)."""
+    """Odds em cache. Consulta o MoviOdds só no slot agendado (no máximo 2 tentativas).
+
+    Cache com mais de 20 minutos conta como odds ausentes: a lista antiga fica
+    guardada, mas quem chama recebe [].
+    """
     now = now or agora_cet()
     ts = time.time() if agora_ts is None else agora_ts
     slot = _slot_para_consultar(cache, now, ts)
     if slot is None:
-        return cache.lista
+        return _lista_cache_vigente(cache, ts)
     lista, erro = _fetch_anotando_erro(moviodds)
     cache.tentativas[slot] = cache.tentativas.get(slot, 0) + 1
     cache.ultima_tentativa[slot] = ts
@@ -241,7 +258,7 @@ def obter_odds(moviodds: "MoviOdds", cache: CacheOdds,
         cache.lista = lista
         cache.quando = ts
     log.info("[ODDS] consulta %s -> %s jogos", slot.split("|", 1)[1], len(lista))
-    return cache.lista
+    return _lista_cache_vigente(cache, ts)
 
 def janela_rodada2(slot_key: str) -> Tuple[datetime, datetime]:
     """Para o slot 'YYYY-MM-DD|hh:55' retorna (início, fim) da 2ª rodada: hh+1:00 .. hh+1:50 CET."""
@@ -363,6 +380,7 @@ class Historico:
         HISTORY_FILE.write_text(json.dumps(self.data, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def get(self, nome: str) -> Optional[dict]:
+        """Nome exato (caixa ignorada) ou o mesmo jogador normalizado. Sem substring."""
         nome_l = nome.lower().strip()
         for k, v in self.data.items():
             if k.lower() == nome_l:
@@ -370,12 +388,10 @@ class Historico:
         for k, v in self.data.items():
             if mesmo_jogador(k, nome):
                 return {**v, "_key": k}
-        for k, v in self.data.items():
-            if nome_l in k.lower() or k.lower() in nome_l:
-                return {**v, "_key": k}
         return None
 
-    def set_resultado(self, nome: str, resultado: str, sets_f: int = None, sets_c: int = None, odd: float = None):
+    def set_resultado(self, nome: str, resultado: str, sets_f: int = None, sets_c: int = None,
+                      odd: float = None, inicio: Optional[datetime] = None):
         key = nome
         existing = self.get(nome)
         if existing and existing.get("_key"):
@@ -389,6 +405,8 @@ class Historico:
         })
         if odd is not None:
             entry["odd"] = odd
+        if inicio is not None:
+            entry["inicio"] = _iso_inicio(inicio)
         self.data[key] = entry
         self.save()
         log.info(f"Histórico: {nome} → {resultado}" + (f" (odd {odd})" if odd else ""))
@@ -605,14 +623,14 @@ def com_odds(fixtures: List[OddsMatch], odds_list: List[OddsMatch]) -> List[Odds
     return out
 
 def confrontos_rodada2(odds_list: List[OddsMatch], slot_key: str) -> List[OddsMatch]:
-    """Jogos ainda não iniciados que começam na 2ª rodada do slot (hh+1:00 .. hh+1:50 CET).
-    Se a API não trouxer horário, usa todos os jogos não iniciados sem horário."""
+    """Jogos ainda não iniciados cujo início cai na 2ª rodada do slot (hh+1:00 .. hh+1:50 CET).
+
+    Sem horário de início o jogo não é 2ª rodada.
+    """
     ini, fim = janela_rodada2(slot_key)
     out, vistos = [], set()
     for o in odds_list:
-        if o.in_play:
-            continue
-        if o.kickoff is not None and not (ini <= o.kickoff <= fim):
+        if o.in_play or o.kickoff is None or not (ini <= o.kickoff <= fim):
             continue
         k = chave_par(o.home, o.away)
         if k in vistos:
@@ -634,6 +652,7 @@ class LiveMatch:
     score2: Optional[int] = None
     current_set: Optional[str] = None
     finished: bool = False
+    kickoff: Optional[datetime] = None
 
 @dataclass
 class Resultado:
@@ -758,6 +777,97 @@ class ScoreMondo:
 # FILTRO
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _iso_inicio(inicio: datetime) -> str:
+    if inicio.tzinfo is None:
+        inicio = TZ.localize(inicio)
+    return inicio.astimezone(TZ).isoformat()
+
+def _ler_inicio(entry: dict) -> Optional[datetime]:
+    raw = entry.get("inicio")
+    if isinstance(raw, datetime):
+        dt = raw
+    elif isinstance(raw, str) and raw:
+        try:
+            dt = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+    else:
+        return None
+    if dt.tzinfo is None:
+        dt = TZ.localize(dt)
+    return dt.astimezone(TZ)
+
+def _no_dia(ref: datetime, hour: int, minute: int) -> datetime:
+    local = ref.astimezone(TZ)
+    return TZ.localize(datetime(local.year, local.month, local.day, hour, minute))
+
+def _hora_ciclo_r2(kickoff: Optional[datetime]) -> Optional[int]:
+    """Hora hh (8/12/16/20) se kickoff cai na 2ª rodada desse ciclo (hh+1:00 .. hh+1:50)."""
+    if kickoff is None:
+        return None
+    local = kickoff.astimezone(TZ)
+    for hh in HORAS_ENTRADA:
+        ini = _no_dia(local, hh + 1, 0)
+        fim = _no_dia(local, hh + 1, 50)
+        if ini <= local <= fim:
+            return hh
+    return None
+
+def _r1_no_ciclo(entry: dict, kickoff_r2: Optional[datetime]) -> bool:
+    """O jogo da 1ª rodada deste jogador começou entre hh:00 e hh:50 do mesmo ciclo."""
+    hh = _hora_ciclo_r2(kickoff_r2)
+    if hh is None or kickoff_r2 is None:
+        return False
+    inicio = _ler_inicio(entry)
+    if inicio is None:
+        return False
+    ini = _no_dia(kickoff_r2, hh, 0)
+    fim = _no_dia(kickoff_r2, hh, 50)
+    return ini <= inicio <= fim
+
+def _janela_r1_inicio(agora: datetime) -> Optional[Tuple[datetime, datetime]]:
+    """Se agora está na janela de gravar a 1ª rodada, devolve hh:00 .. hh:50 desse ciclo."""
+    local = agora.astimezone(TZ)
+    t = local.time()
+    for h1, m1, h2, m2 in JANELAS_R1:
+        if dtime(h1, m1) <= t <= dtime(h2, m2, 59):
+            return _no_dia(local, h1, 0), _no_dia(local, h1, 50)
+    return None
+
+def _janela_r2_inicio(agora: datetime) -> Optional[Tuple[datetime, datetime]]:
+    """Se agora está na 2ª rodada, devolve o intervalo hh+1:00 .. hh+1:50 desse ciclo."""
+    local = agora.astimezone(TZ)
+    t = local.time()
+    for h1, m1, h2, m2 in JANELAS_R2:
+        if dtime(h1, m1) <= t <= dtime(h2, m2, 59):
+            return _no_dia(local, h1, m1), _no_dia(local, h2, m2)
+    return None
+
+def _kickoff_conhecido(m, odds_list: List[OddsMatch]) -> Optional[datetime]:
+    ko = getattr(m, "kickoff", None)
+    if ko is not None:
+        return ko
+    o = achar_odds(m.player1, m.player2, odds_list)
+    return o.kickoff if o else None
+
+def _tem_odd_ao_vivo(p1: str, p2: str, odds_list: List[OddsMatch]) -> bool:
+    for o in odds_list:
+        if not o.in_play:
+            continue
+        if (mesmo_jogador(o.home, p1) and mesmo_jogador(o.away, p2)) or \
+           (mesmo_jogador(o.home, p2) and mesmo_jogador(o.away, p1)):
+            return True
+    return False
+
+def _odd_do_jogador(player: str, o: Optional[OddsMatch]) -> Optional[float]:
+    if not o:
+        return None
+    if mesmo_jogador(o.home, player):
+        return o.odd_home
+    if mesmo_jogador(o.away, player):
+        return o.odd_away
+    return None
+
 def classificar(sf: int, sc: int) -> str:
     if sf == 3 and sc <= 1:
         return "limpo"
@@ -769,11 +879,11 @@ def classificar(sf: int, sc: int) -> str:
 
 def avaliar(m, hist: Historico, odds_map: Dict[str, OddsMatch]) -> Tuple[str, List[str], Optional[str]]:
     """Aplica as regras a qualquer objeto com .player1 e .player2 (LiveMatch ou OddsMatch)."""
-    return avaliar_par(m.player1, m.player2, hist, odds_map)
+    return avaliar_par(m.player1, m.player2, hist, odds_map, kickoff=getattr(m, "kickoff", None))
 
 def avaliar_par(player1: str, player2: str, hist: Historico,
-                odds_map: Dict[str, OddsMatch]) -> Tuple[str, List[str], Optional[str]]:
-    p1l, p2l = player1.lower(), player2.lower()
+                odds_map: Dict[str, OddsMatch],
+                kickoff: Optional[datetime] = None) -> Tuple[str, List[str], Optional[str]]:
     h1 = hist.get(player1)
     h2 = hist.get(player2)
     if not h1 or not h2:
@@ -788,54 +898,29 @@ def avaliar_par(player1: str, player2: str, hist: Historico,
     if h1["resultado"] == "derrota" and h2["resultado"] == "derrota":
         return "bloqueado", ["Duelo de Perdedores (Regra 3)"], None
 
-    # Odds
-    om = odds_map.get(f"{p1l}|{p2l}") or odds_map.get(f"{p2l}|{p1l}")
-    if not om:
-        om = achar_odds(player1, player2, list(odds_map.values()))
-    if not om:
-        for key, om_ in odds_map.items():
-            if (p1l in key or key in p1l) and (p2l in key or key in p2l):
-                om = om_
-                break
-    if not om:
-        for om_ in odds_map.values():
-            names = {om_.home.lower(), om_.away.lower()}
-            if p1l in names or any(p1l in n or n in p1l for n in names):
-                if p2l in names or any(p2l in n or n in p2l for n in names):
-                    om = om_
-                    break
+    if not _r1_no_ciclo(h1, kickoff) or not _r1_no_ciclo(h2, kickoff):
+        return "bloqueado", ["1ª rodada fora de hh:00–hh:50 do ciclo"], None
 
+    # Favorito só pelas odds pré-jogo DESTE confronto (2ª rodada).
+    # A odd gravada na 1ª rodada é contra outro adversário e não entra na conta.
+    # Odd ao vivo (in_play) também não serve.
+    om = achar_odds(player1, player2, [o for o in odds_map.values() if not o.in_play])
     odd1 = odd2 = None
-    if om:
-        if om.home.lower() == p1l or p1l in om.home.lower() or mesmo_jogador(om.home, player1):
-            odd1, odd2 = om.odd_home, om.odd_away
-        else:
-            odd1, odd2 = om.odd_away, om.odd_home
+    if om and mesmo_jogador(om.home, player1):
+        odd1, odd2 = om.odd_home, om.odd_away
+    elif om and mesmo_jogador(om.away, player1):
+        odd1, odd2 = om.odd_away, om.odd_home
 
-    # Prefer stored odds from R1 if available
-    if h1.get("odd"):
-        odd1 = h1["odd"]
-    if h2.get("odd"):
-        odd2 = h2["odd"]
-
-    if odd1 and odd2:
-        if abs(odd1 - odd2) < 0.15:
-            return "bloqueado", ["Odds ≈ 50/50 (Regra 5)"], None
-        if odd1 < odd2:
-            fav_nome, und_nome, fav, und = player1, player2, h1, h2
-            odd_fav = odd1
-        else:
-            fav_nome, und_nome, fav, und = player2, player1, h2, h1
-            odd_fav = odd2
+    if not odd1 or not odd2:
+        return "bloqueado", ["sem odds de mercado"], None
+    if odd1 == odd2 or min(odd1, odd2) > ODD_MAX_FAVORITO:
+        return "bloqueado", ["Odds ≈ 50/50 (Regra 5)"], None
+    if odd1 < odd2:
+        fav_nome, und_nome, fav, und = player1, player2, h1, h2
+        odd_fav = odd1
     else:
-        if h1["resultado"] == "limpo" and h2["resultado"] == "derrota":
-            fav_nome, und_nome, fav, und = player1, player2, h1, h2
-            odd_fav = None
-        elif h2["resultado"] == "limpo" and h1["resultado"] == "derrota":
-            fav_nome, und_nome, fav, und = player2, player1, h2, h1
-            odd_fav = None
-        else:
-            return "bloqueado", ["Sem odds + não é limpo vs derrota"], None
+        fav_nome, und_nome, fav, und = player2, player1, h2, h1
+        odd_fav = odd2
 
     if fav["resultado"] == "derrota":
         return "bloqueado", [f"Inversão: favorito ({fav_nome}) perdeu na 1ª (Regra 4)"], None
@@ -923,7 +1008,6 @@ def processar_entrada(slot_key: str, hist: Historico, sinais: CacheSet, entradas
 def processar(matches: List[LiveMatch], hist: Historico, finished: CacheSet,
               sinais: CacheSet, tg: Telegram, modo: str, odds_list: List[OddsMatch],
               apostas: "Apostas" = None):
-    odds_map = montar_odds_map(odds_list)
     dia = agora_cet().strftime("%Y-%m-%d")
 
     for m in matches:
@@ -931,27 +1015,36 @@ def processar(matches: List[LiveMatch], hist: Historico, finished: CacheSet,
 
         if modo == "R1" and m.finished and not finished.has(key_m):
             if m.score1 is not None and m.score2 is not None:
-                r1 = classificar(m.score1, m.score2)
-                r2 = classificar(m.score2, m.score1)
-                odd1 = odd2 = None
-                for o in odds_list:
-                    if (m.player1.lower() in o.home.lower() or o.home.lower() in m.player1.lower()) and \
-                       (m.player2.lower() in o.away.lower() or o.away.lower() in m.player2.lower()):
-                        odd1, odd2 = o.odd_home, o.odd_away
-                        break
-                    if (m.player1.lower() in o.away.lower() or o.away.lower() in m.player1.lower()) and \
-                       (m.player2.lower() in o.home.lower() or o.home.lower() in m.player2.lower()):
-                        odd1, odd2 = o.odd_away, o.odd_home
-                        break
-                hist.set_resultado(m.player1, r1, m.score1, m.score2, odd1)
-                hist.set_resultado(m.player2, r2, m.score2, m.score1, odd2)
-                finished.add(key_m)
-                log.info(f"[R1] {m.player1} ({r1}) vs {m.player2} ({r2})")
+                janela = _janela_r1_inicio(agora_cet())
+                kickoff = _kickoff_conhecido(m, odds_list)
+                if janela and kickoff is not None and janela[0] <= kickoff <= janela[1]:
+                    r1 = classificar(m.score1, m.score2)
+                    r2 = classificar(m.score2, m.score1)
+                    o = achar_odds(m.player1, m.player2, odds_list)
+                    odd1 = _odd_do_jogador(m.player1, o)
+                    odd2 = _odd_do_jogador(m.player2, o)
+                    hist.set_resultado(m.player1, r1, m.score1, m.score2, odd1, inicio=kickoff)
+                    hist.set_resultado(m.player2, r2, m.score2, m.score1, odd2, inicio=kickoff)
+                    finished.add(key_m)
+                    log.info(f"[R1] {m.player1} ({r1}) vs {m.player2} ({r2})")
 
         if modo == "R2":
             key_s = chave_sinal(m.player1, m.player2, dia)
             if sinais.has(key_s):
                 continue   # já enviado/avaliado às hh:55
+            # Só pré-jogo: odd ao vivo significa que o confronto já começou.
+            if _tem_odd_ao_vivo(m.player1, m.player2, odds_list):
+                continue
+            agora = agora_cet()
+            janela = _janela_r2_inicio(agora)
+            pre = achar_odds(m.player1, m.player2, [o for o in odds_list if not o.in_play])
+            kickoff = getattr(m, "kickoff", None) or (pre.kickoff if pre else None)
+            if (janela is None or kickoff is None or not (janela[0] <= kickoff <= janela[1])
+                    or kickoff <= agora):
+                continue
+            if getattr(m, "kickoff", None) is None:
+                m.kickoff = kickoff
+            odds_map = montar_odds_map([o for o in odds_list if not o.in_play])
             status, motivos, fav = avaliar(m, hist, odds_map)
             if status == "verde":
                 texto = (
@@ -986,8 +1079,8 @@ def registrar_resultados_r1(resultados: List[Resultado], hist: Historico, finish
         o1 = o2 = None
         if o:
             o1, o2 = (o.odd_home, o.odd_away) if mesmo_jogador(o.home, r.home) else (o.odd_away, o.odd_home)
-        hist.set_resultado(r.home, classificar(r.sets_home, r.sets_away), r.sets_home, r.sets_away, o1)
-        hist.set_resultado(r.away, classificar(r.sets_away, r.sets_home), r.sets_away, r.sets_home, o2)
+        hist.set_resultado(r.home, classificar(r.sets_home, r.sets_away), r.sets_home, r.sets_away, o1, inicio=r.kickoff)
+        hist.set_resultado(r.away, classificar(r.sets_away, r.sets_home), r.sets_away, r.sets_home, o2, inicio=r.kickoff)
         finished.add(key)
         n += 1
     if n:
@@ -1524,7 +1617,7 @@ def checar_config():
         sys.exit(1)
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     if not MOVIODDS_KEY and not MOVIODDS_KEY_2:
-        log.warning("MOVIODDS_KEY não definida: rodando sem odds (só regra 'limpo vs derrota').")
+        log.warning("MOVIODDS_KEY não definida: rodando sem odds de mercado (não há entrada).")
     if str(GROUP_ID) == str(CHAT_ID):
         log.warning("TELEGRAM_GROUP_ID não definido: entradas vão para o chat privado (TELEGRAM_CHAT_ID).")
 
