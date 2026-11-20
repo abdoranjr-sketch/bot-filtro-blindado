@@ -154,7 +154,7 @@ status, motivos, fav = b.avaliar(
 check(status == "indefinido", (status, motivos))
 
 # ---------- jogo sem horário não é 2ª rodada ----------
-slot = "2026-11-20|08:55"
+slot = "2026-11-20|09:00"
 com = jogo("A Alfa", "B Beta", 1.50, 2.50, 9, 0)
 sem = jogo("C Gama", "D Delta", 1.50, 2.50, None, None)
 fora = jogo("E Eps", "F Fi", 1.50, 2.50, 10, 0)
@@ -195,7 +195,7 @@ check(h.get("A Alfa")["inicio"].startswith("2026-11-20T08:30:00"), h.get("A Alfa
 check(h.get("C Gama") is None and h.get("E Eps") is None, h.data)
 check(tg.sent == [], tg.sent)
 
-at(9, 10)
+at(9, 29)
 h.definir_jogos("Petr", [
     {"resultado": "limpo", "sets_favor": 3, "sets_contra": 0, "inicio": K(8, 0)},
     {"resultado": "limpo", "sets_favor": 3, "sets_contra": 1, "inicio": K(8, 20)},
@@ -219,7 +219,7 @@ check(entrada and entrada["pick"] == "Petr" and entrada["origem"] == "ao_vivo", 
 check(ap.get(b.chave_sinal("A Alfa", "B Beta", "2026-11-20")) is None, "jogo já iniciado")
 check(ap.get(b.chave_sinal("C Gama", "D Delta", "2026-11-20")) is None, "sem hora ou odd ao vivo")
 
-# ---------- 07:48 continua, mas não é a primeira consulta do dia ----------
+# ---------- grade: 160/dia, odds a cada 15 min, primeira às 00:00 ----------
 slots = []
 for hora in range(24):
     for minuto in range(60):
@@ -228,16 +228,15 @@ for hora in range(24):
             slots.append((hora, minuto, "resultados"))
         elif b.slot_moviodds_atual(quando):
             slots.append((hora, minuto, "odds"))
-check(slots[0] == (0, 10, "resultados"), slots[0])
-check((7, 48, "resultados") in slots, slots)
+check(slots[0] == (0, 0, "odds"), slots[0])
 check(b.MOVIODDS_CHAMADAS_DIA == 160 and b.MOVIODDS_CHAMADAS_DIA <= 161, b.MOVIODDS_CHAMADAS_DIA)
 check(b.MOVIODDS_CHAMADAS_MES_31 == 4960 and b.MOVIODDS_CHAMADAS_MES_31 < 5000, b.MOVIODDS_CHAMADAS_MES_31)
 check(len(slots) == b.MOVIODDS_CHAMADAS_DIA, len(slots))
-check(b.slot_moviodds_atual(b.TZ.localize(datetime(2026, 11, 20, 7, 48))) is None, "07:48 é resultado")
-check(b.slot_resultados_atual(b.TZ.localize(datetime(2026, 11, 20, 7, 48))) == "2026-11-20|07:48", "07:48")
+check(len({(h, m) for h, m, _ in slots}) == len(slots), "um minuto, uma chamada")
 for h in range(24):
-    antes = [m for hh, m in b.MOVIODDS_MINUTOS_ODDS if hh == h and m < 55]
-    check(any(0 < 55 - m <= 20 for m in antes), (h, antes))
+    check((h, 0, "odds") in slots and (h, 15, "odds") in slots, h)
+    check((h, 30, "odds") in slots and (h, 45, "odds") in slots, h)
+    check((h, 10, "resultados") in slots and (h, 40, "resultados") in slots, h)
 
 # ---------- motivos com placar, odds e jogos que ficaram de fora ----------
 def tlen(s):
@@ -329,13 +328,13 @@ check(any(o.home == "Ivan Hora" for o in defs) and any(o.home == "Sem & Placar" 
 check(len(verdes_msg) == 1 and verdes_msg[0][1] == "Petr Svoboda", verdes_msg)
 
 # ao vivo: o verde usa os mesmos motivos; bloqueado não gera mensagem
-at(9, 10)
+at(9, 19)
 tg = FakeTG()
 sinais = b.CacheSet(b.ENVIADOS_FILE)
 b.processar(
     [
         b.LiveMatch("Jan Novak", "Petr Svoboda", None, None, None, False, K(9, 20)),
-        b.LiveMatch("Ivan Hora", "Adam Kral", None, None, None, False, K(9, 30)),
+        b.LiveMatch("Ivan Hora", "Adam Kral", None, None, None, False, K(9, 20)),
     ],
     h, b.CacheSet(b.FINISHED_FILE), sinais, tg, "R2",
     [
@@ -384,7 +383,9 @@ for i in range(45):
     gravar(h, c, "limpo", 1.2, K(12, 0), 3, 0)
     lista.append(jogo(a, c, 1.50, 2.40, 13, 10 + (i % 40)))
     total_fora += 1
-slot = "2026-11-20|12:55"
+for i, jogo_i in enumerate(lista):
+    jogo_i.kickoff = K(13, 0)
+slot = "2026-11-20|13:00"
 tg = FakeTG()
 ok = b.processar_entrada(slot, h, b.CacheSet(b.ENVIADOS_FILE), b.CacheSet(b.ENTRADAS_FILE), tg, lista, None)
 check(ok and tg.sent, "envio da entrada longa")
