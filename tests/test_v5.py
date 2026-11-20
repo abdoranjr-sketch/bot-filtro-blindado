@@ -25,13 +25,17 @@ def check(c, m):
 
 K = lambda h, m, d=20: b.TZ.localize(datetime(2026, 11, d, h, m))
 def par_verde(h, fav, und, ini):
-    """Favorito com 2 vitórias limpas hoje e adversário com derrota 0-3."""
+    """Alvo com 2 vitórias limpas e adversário com 0-3, fora dos 45 min anteriores ao apito.
+
+    `ini` é a hora do ciclo; o jogo entra uma hora depois. A forma fica ~2 h antes.
+    """
+    base = ini - timedelta(hours=1)
     h.definir_jogos(fav, [
-        {"resultado": "limpo", "sets_favor": 3, "sets_contra": 0, "inicio": ini},
-        {"resultado": "limpo", "sets_favor": 3, "sets_contra": 1, "inicio": ini + timedelta(minutes=20)},
+        {"resultado": "limpo", "sets_favor": 3, "sets_contra": 0, "inicio": base},
+        {"resultado": "limpo", "sets_favor": 3, "sets_contra": 1, "inicio": base + timedelta(minutes=25)},
     ])
     h.definir_jogos(und, [
-        {"resultado": "derrota", "sets_favor": 0, "sets_contra": 3, "inicio": ini},
+        {"resultado": "derrota", "sets_favor": 0, "sets_contra": 3, "inicio": base + timedelta(minutes=5)},
     ])
 # ---------- 1. entrada 08:55 registra apostas
 at(2026,11,20,8,55,5)

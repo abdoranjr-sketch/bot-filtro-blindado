@@ -145,7 +145,7 @@ def boom(*a, **k):
 
 
 # ---------- o filtro de hoje e o orçamento do MoviOdds não mudam ----------
-check(b.ODD_MAX_FAVORITO == 1.65, b.ODD_MAX_FAVORITO)
+check(b.ODD_MIN_ALVO == 1.25 and b.ODD_MAX_ALVO == 1.85, (b.ODD_MIN_ALVO, b.ODD_MAX_ALVO))
 check(b.MOVIODDS_CHAMADAS_DIA == 160, b.MOVIODDS_CHAMADAS_DIA)
 check(b.MOVIODDS_CHAMADAS_MES_31 == 4960, b.MOVIODDS_CHAMADAS_MES_31)
 check(s.TETO_DIA == 40 and s.TETO_PLANO == 50 and s.FOLGA_RESTANTE == 10, (s.TETO_DIA, s.FOLGA_RESTANTE))
@@ -221,10 +221,10 @@ check("SPORTSAPI365" not in repr(off), repr(off))
 b.agora_cet = lambda: K(8, 55)
 h = novo_hist()
 h.definir_jogos("Petr Svoboda", [
-    {"resultado": "limpo", "sets_favor": 3, "sets_contra": 0, "inicio": K(8, 0)},
-    {"resultado": "limpo", "sets_favor": 3, "sets_contra": 1, "inicio": K(8, 20)},
+    {"resultado": "limpo", "sets_favor": 3, "sets_contra": 0, "inicio": K(7, 20)},
+    {"resultado": "limpo", "sets_favor": 3, "sets_contra": 1, "inicio": K(7, 40)},
 ])
-h.definir_jogos("Jan Novak", [{"resultado": "derrota", "sets_favor": 0, "sets_contra": 3, "inicio": K(8, 10)}])
+h.definir_jogos("Jan Novak", [{"resultado": "derrota", "sets_favor": 0, "sets_contra": 3, "inicio": K(7, 30)}])
 partida = jogo("Petr Svoboda", "Jan Novak", 1.50, 2.50, 9, 0)
 status, motivos, fav = b.avaliar(partida, h, b.montar_odds_map([partida]))
 check(status == "verde" and fav == "Petr Svoboda", (status, motivos, fav))
@@ -487,13 +487,13 @@ def dia_verde():
     hh = novo_hist()
     def dois_limpos(nome):
         hh.definir_jogos(nome, [
-            {"resultado": "limpo", "sets_favor": 3, "sets_contra": 0, "inicio": K(8, 0)},
-            {"resultado": "limpo", "sets_favor": 3, "sets_contra": 1, "inicio": K(8, 20)},
+            {"resultado": "limpo", "sets_favor": 3, "sets_contra": 0, "inicio": K(7, 20)},
+            {"resultado": "limpo", "sets_favor": 3, "sets_contra": 1, "inicio": K(7, 40)},
         ])
     def feia(nome):
-        hh.definir_jogos(nome, [{"resultado": "derrota", "sets_favor": 0, "sets_contra": 3, "inicio": K(8, 10)}])
+        hh.definir_jogos(nome, [{"resultado": "derrota", "sets_favor": 0, "sets_contra": 3, "inicio": K(7, 30)}])
     def uma(nome):
-        hh.definir_jogos(nome, [{"resultado": "limpo", "sets_favor": 3, "sets_contra": 0, "inicio": K(8, 5)}])
+        hh.definir_jogos(nome, [{"resultado": "limpo", "sets_favor": 3, "sets_contra": 0, "inicio": K(7, 25)}])
     dois_limpos("Petr Svoboda")
     feia("Jan Novak")
     dois_limpos("Ivan Hora")
@@ -517,18 +517,18 @@ check(st_petr == "verde" and fav_petr == "Petr Svoboda", (st_petr, mot_petr))
 partes, verdes, defs = b.montar_mensagem_entrada(slot, lista, hh, lista, None, ant)
 check(len(partes) == 1, [len(p) for p in partes])
 msg = partes[0]
-check(len(verdes) == 1 and verdes[0][1] == "Ivan Hora", verdes)
-check(any(o.home == "Petr Svoboda" for o in defs), "H2H bloqueado não volta ao vivo")
+check(len(verdes) == 2 and [v[1] for v in verdes] == ["Ivan Hora", "Petr Svoboda"], verdes)
+check(any(o.home == "Petr Svoboda" for o in defs), "aprovado continua definitivo")
 verde_txt, fora_txt = msg.split("<b>Sem entrada</b>", 1)
 check("Histórico 7d: 2 V / 0 D (100% limpas)" in verde_txt, verde_txt)
 check("Histórico 7d: 0 V / 2 D (0% limpas)" in verde_txt, verde_txt)
 check("H2H 14d: 1 x 0" in verde_txt, verde_txt)
-check("<b>Petr Svoboda</b> — Histórico 7d: 3 V / 1 D (50% limpas)" in fora_txt, fora_txt)
-check("<b>Jan Novak</b> — Histórico 7d: 1 V / 1 D (50% limpas)" in fora_txt, fora_txt)
-check("H2H 14d: 0 x 2" in fora_txt, fora_txt)
-check("❌ H2H: favorito perdeu os 2 últimos para Jan Novak" in fora_txt, fora_txt)
+check("<b>Petr Svoboda</b> — Histórico 7d: 3 V / 1 D (50% limpas)" in verde_txt, verde_txt)
+check("<b>Jan Novak</b> — Histórico 7d: 1 V / 1 D (50% limpas)" in verde_txt, verde_txt)
+check("H2H 14d: 0 x 2" in verde_txt, verde_txt)
+check("H2H: favorito perdeu os 2 últimos" not in msg, msg)
 check("Entrada: NENHUMA" not in msg and "<b>SINAL VERDE</b>" in msg, msg[:400])
-check("Duelo de Vencedores" in fora_txt, fora_txt)
+check("Odd fora da faixa: 2.40" in fora_txt, fora_txt)
 check(fora_txt.count("Histórico 7d: 1 V / 0 D (100% limpas)") == 2, fora_txt)
 linhas_hist = [ln for ln in msg.splitlines() if "Histórico 7d:" in ln]
 check(linhas_hist and all("Bilek" not in ln and "Horak" not in ln and "Ruzicka" not in ln for ln in linhas_hist), linhas_hist)
@@ -537,15 +537,15 @@ check(all("H2H 14d" not in ln or "0 x 2" in ln or "1 x 0" in ln for ln in msg.sp
 # derrota de hoje continua na frente do H2H; a linha de histórico permanece
 hh_perda = novo_hist()
 hh_perda.definir_jogos("Petr Svoboda", [
-    {"resultado": "limpo", "sets_favor": 3, "sets_contra": 0, "inicio": K(8, 0)},
-    {"resultado": "derrota", "sets_favor": 1, "sets_contra": 3, "inicio": K(8, 20)},
+    {"resultado": "limpo", "sets_favor": 3, "sets_contra": 0, "inicio": K(7, 20)},
+    {"resultado": "derrota", "sets_favor": 1, "sets_contra": 3, "inicio": K(7, 50)},
 ])
-hh_perda.definir_jogos("Jan Novak", [{"resultado": "derrota", "sets_favor": 0, "sets_contra": 3, "inicio": K(8, 10)}])
+hh_perda.definir_jogos("Jan Novak", [{"resultado": "derrota", "sets_favor": 0, "sets_contra": 3, "inicio": K(7, 30)}])
 so_perda = jogo("Petr Svoboda", "Jan Novak", 1.37, 2.90, 9, 0)
 partes_perda, verdes_perda, _ = b.montar_mensagem_entrada(slot, [so_perda], hh_perda, [so_perda], None, ant)
 check(verdes_perda == [], verdes_perda)
 texto_perda = partes_perda[0]
-check("❌ favorito Petr Svoboda já perdeu hoje (1-3) — odd 1.37 ignorada" in texto_perda, texto_perda)
+check("PASSAR (Sem domínio comprovado)" in texto_perda, texto_perda)
 check("H2H: favorito perdeu os 2 últimos" not in texto_perda, texto_perda)
 check("Histórico 7d: 3 V / 1 D (50% limpas)" in texto_perda, texto_perda)
 check("H2H 14d: 0 x 2" in texto_perda, texto_perda)
@@ -580,18 +580,21 @@ b.processar(
         b.LiveMatch("Ivan Hora", "Adam Kral", None, None, None, False, K(9, 30)),
     ],
     hh, b.CacheSet(Path(tempfile.mkdtemp()) / "fin.json"), sinais, tg, "R2",
-    [h2h_block, verde], None, None, ant,
+    [jogo("Petr Svoboda", "Jan Novak", 1.50, 2.60, 9, 30),
+     jogo("Ivan Hora", "Adam Kral", 1.40, 2.70, 9, 30)], None, None, ant,
 )
-check(len(tg.sent) == 1, tg.sent)
-check("SINAL VERDE" in tg.sent[0] and "Ivan Hora" in tg.sent[0], tg.sent[0])
-check("Histórico 7d" not in tg.sent[0] and "H2H 14d" not in tg.sent[0], tg.sent[0])
-check("Petr Svoboda" not in tg.sent[0], tg.sent[0])
+check(len(tg.sent) == 2, tg.sent)
+junto_vivo = "\n".join(tg.sent)
+check("SINAL VERDE" in junto_vivo and "Ivan Hora" in junto_vivo and "Petr Svoboda" in junto_vivo, junto_vivo)
+check("Histórico 7d" not in junto_vivo and "H2H 14d" not in junto_vivo, junto_vivo)
+check("H2H: favorito perdeu" not in junto_vivo, junto_vivo)
 
 tg2 = FakeTG()
 b.processar(
     [b.LiveMatch("Petr Svoboda", "Jan Novak", None, None, None, False, K(9, 30))],
     hh, b.CacheSet(Path(tempfile.mkdtemp()) / "fin2.json"),
-    b.CacheSet(Path(tempfile.mkdtemp()) / "sinais2.json"), tg2, "R2", [h2h_block],
+    b.CacheSet(Path(tempfile.mkdtemp()) / "sinais2.json"), tg2, "R2",
+    [jogo("Petr Svoboda", "Jan Novak", 1.50, 2.60, 9, 30)],
 )
 check(len(tg2.sent) == 1 and "Petr Svoboda" in tg2.sent[0] and "odd 1.50" in tg2.sent[0], tg2.sent)
 

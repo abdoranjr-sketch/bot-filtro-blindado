@@ -16,13 +16,16 @@ somente Czech Liga Pro — 24 h, madrugada inclusive):
       fora é cortada ("… e mais N jogos") ou a mensagem é dividida em mais de um envio.
   Fallback ao vivo: nos últimos 2 min antes do início, se o bloco ainda não foi enviado.
 
-Filtro rígido por FORMA DO DIA (desde 00:00 CET, o fuso que o bot já usa):
-  O favorito sai só das odds pré-jogo do jogo alvo (máx 1.65). Todos os jogos já
-  finalizados de cada jogador no dia entram na conta (MoviOdds /results, cache em
-  DATA_DIR). Para entrar, as quatro condições valem juntas: o favorito não perdeu
-  hoje; tem pelo menos 2 vitórias limpas (3-0 ou 3-1) e nenhuma 3-2; o adversário
-  tem derrota feia (0-3 ou 1-3). Seguem os vetos de vencedor x vencedor e
-  perdedor x perdedor. Sem odds, ou cache de odds com mais de 20 min, não há entrada.
+Filtro rígido por FORMA NA JANELA (últimas 4 h; o alvo é quem tem o melhor
+  score_forma, não o favorito da casa):
+  score 3-0=+3, 3-1=+2, 3-2=+0.5, 2-3=-0.5, 1-3=-2, 0-3=-3, nos últimos 2–3
+  jogos finalizados. jogos_hoje = finalizados nas últimas 3 h. Entra só se os
+  dois têm pelo menos 1 jogo nessa janela de 3 h, a odd do alvo está em
+  [1.25, 1.85], o alvo não perdeu o último, tem 2 vitórias limpas seguidas
+  (3-0/3-1), não vem de 5 sets há menos de 45 min, não jogou nos 45 min
+  anteriores ao apito, o adversário tem score <= 0, o gap (com bônus de
+  adversário comum) é >= 5 e os dois não estão com score >= 3. Sem odds, ou
+  cache de odds com mais de 20 min, não há entrada. H2H 14d é só informação.
 
 MoviOdds (odds + resultados) — 160 consultas/dia na grade (4.960 em 31 dias, abaixo de 5.000).
   Uma consulta de odds traz todos os jogos futuros, então a grade pede odds a cada
@@ -57,15 +60,14 @@ Configuração (variáveis de ambiente):
                 MOVIODDS_KEY_2 (reserva do MoviOdds, opcional: entra por 30 min se a
                 principal falhar com 401, 403, 429, 5xx ou erro de rede)
                 SPORTSAPI365_KEY (resultados anteriores, RapidAPI; sem ela o bot segue
-                igual, sem linha de histórico e sem o bloqueio extra de H2H)
+                igual, sem as linhas de Histórico 7d e H2H 14d)
                 DATA_DIR     (pasta dos arquivos .json; padrão = pasta do script)
 
 Resultados anteriores (SportsAPI365, opcional): uma vez por dia, depois das 00:30
 Europe/Prague, baixa os finalizados de ontem (no primeiro arranque, até 7 dias) e
 guarda 14 dias em DATA_DIR. No máximo 40 chamadas por dia, abaixo do teto de 50.
-A mensagem de cada bloco mostra a forma de 7 dias e o H2H de 14, lidos só do cache.
-Se o favorito perdeu os 2 últimos confrontos diretos nesses 14 dias, a entrada é
-bloqueada. As quatro regras da forma do dia e as 160 consultas do MoviOdds não mudam.
+A mensagem de cada bloco mostra a forma de 7 dias e o H2H de 14, lidos só do cache,
+como informação. O H2H não bloqueia entrada. As 160 consultas do MoviOdds não mudam.
 """
 
 from __future__ import annotations
@@ -116,11 +118,46 @@ ODDS_BOOT_FILE = DATA_DIR / "odds_boot_v5.json"    # consulta imediata já gasta
 
 TZ = pytz.timezone("Europe/Madrid")
 
-# Favorito claro na 2ª rodada: a odd de mercado do favorito tem de ser no máximo esta.
-# 1.80/2.00 não passa (a diferença antiga de 0.15 deixava esse par entrar).
-ODD_MAX_FAVORITO = 1.65
+# Odd do alvo (melhor score_forma). Os limites são inclusivos.
+ODD_MIN_ALVO = 1.25
+ODD_MAX_ALVO = 1.85
 # Cache do MoviOdds mais velho que isto é tratado como odds ausentes.
 ODDS_CACHE_TTL_S = 20 * 60
+# Forma: últimos 2–3 jogos em 4 h. jogos_hoje e triangulação usam 3 h.
+JANELA_SCORE_H = 4
+JANELA_JOGOS_H = 3
+JANELA_TRIANG_H = 3
+MAX_JOGOS_SCORE = 3
+DESGASTE_MIN = 45
+GAP_MIN = 5.0
+SCORE_AMBOS_VITORIAS = 3.0
+# Jogo cujo início cai nesta antecedência do apito = horário anterior.
+SLOT_ANTERIOR_MIN = 45
+# forma_dia_v5.json guarda um pouco mais que a janela de 4 h, inclusive depois da meia-noite.
+RETENCAO_FORMA_H = 8
+# Sem fim na API: início + estes minutos. Sem início: fim − estes minutos.
+# 3 sets ~18 min, 4 ~24, 5 ~35 na Czech Liga Pro.
+DURACAO_ESTIMADA_MIN = {3: 18, 4: 24, 5: 35}
+PESOS_FORMA = {
+    (3, 0): 3.0,
+    (3, 1): 2.0,
+    (3, 2): 0.5,
+    (2, 3): -0.5,
+    (1, 3): -2.0,
+    (0, 3): -3.0,
+}
+
+def duracao_estimada_min(sets_a: int, sets_b: int) -> int:
+    return DURACAO_ESTIMADA_MIN.get(int(sets_a) + int(sets_b), 24)
+
+def estimar_fim(inicio: datetime, sets_a: int, sets_b: int) -> datetime:
+    return inicio + timedelta(minutes=duracao_estimada_min(sets_a, sets_b))
+
+def estimar_inicio(fim: datetime, sets_a: int, sets_b: int) -> datetime:
+    return fim - timedelta(minutes=duracao_estimada_min(sets_a, sets_b))
+
+def peso_sets(sets_favor: int, sets_contra: int) -> float:
+    return float(PESOS_FORMA.get((int(sets_favor), int(sets_contra)), 0.0))
 # Mensagem do bloco: de 8 a 2 minutos antes do início (cerca de 5).
 ENTRADA_ANTES_MAX_S = 8 * 60
 ENTRADA_ANTES_MIN_S = 2 * 60
@@ -599,11 +636,55 @@ class Historico:
             self.data = novos
             self.save()
 
-class FormaDia:
-    """Jogos finalizados da Czech Liga Pro desde 00:00 do dia local, em DATA_DIR.
+def _dt_de(valor) -> Optional[datetime]:
+    if isinstance(valor, datetime):
+        if valor.tzinfo is None:
+            return TZ.localize(valor)
+        return valor.astimezone(TZ)
+    if not valor:
+        return None
+    return _ler_inicio({"inicio": valor})
 
-    Cada consulta MoviOdds de resultados funde aqui. O arquivo não é reescrito
-    só porque a resposta veio vazia, e um dia novo zera a lista.
+def _normalizar_gravado(j: dict) -> Optional[dict]:
+    """Garante início e fim. Registro antigo só com `quando`: esse campo é o início."""
+    try:
+        sh, sa = int(j["sets_home"]), int(j["sets_away"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    fim = _dt_de(j.get("fim"))
+    inicio = _dt_de(j.get("inicio"))
+    fim_estimado = bool(j.get("fim_estimado"))
+    inicio_estimado = bool(j.get("inicio_estimado"))
+    if fim is None and inicio is None:
+        quando = _dt_de(j.get("quando"))
+        if quando is None:
+            return None
+        inicio = quando
+        fim = estimar_fim(inicio, sh, sa)
+        fim_estimado = True
+    elif fim is None:
+        fim = estimar_fim(inicio, sh, sa)
+        fim_estimado = True
+    elif inicio is None:
+        inicio = estimar_inicio(fim, sh, sa)
+        inicio_estimado = True
+    novo = dict(j)
+    novo["sets_home"], novo["sets_away"] = sh, sa
+    novo["inicio"] = inicio.isoformat()
+    novo["fim"] = fim.isoformat()
+    novo["quando"] = fim.isoformat()
+    novo["fim_estimado"] = fim_estimado
+    novo["inicio_estimado"] = inicio_estimado
+    return novo
+
+class FormaDia:
+    """Jogos finalizados da Czech Liga Pro, com início e fim, em DATA_DIR.
+
+    Cada consulta MoviOdds de resultados funde aqui. Sem `finished_at`, o fim é
+    o início mais 18/24/35 min (3/4/5 sets). Sem início, o início é o fim menos
+    essa duração. Arquivo antigo só com `quando` trata esse campo como início.
+    A lista não zera à meia-noite: fica quem terminou nas últimas 8 h.
+    Resposta vazia não apaga o que já foi gravado.
     """
     def __init__(self, path: Optional[Path] = None):
         self.path = path or FORMA_FILE
@@ -628,10 +709,15 @@ class FormaDia:
                        encoding="utf-8")
         tmp.replace(self.path)
 
-    def _abrir(self, dia: str):
-        if self.dia != dia:
-            self.dia = dia
-            self.jogos = []
+    def _podar(self, agora: datetime):
+        limite = agora.astimezone(TZ) - timedelta(hours=RETENCAO_FORMA_H)
+        novos = []
+        for j in self.jogos:
+            fim = _dt_de(j.get("fim") or j.get("quando"))
+            if fim is None or fim >= limite:
+                novos.append(j)
+        if len(novos) != len(self.jogos):
+            self.jogos = novos
             self.save()
 
     def _fundir(self, novos: List[dict]):
@@ -650,75 +736,116 @@ class FormaDia:
             self.jogos.sort(key=lambda j: j.get("quando") or "")
             self.save()
 
+    def _registro(self, bruto: dict, agora: datetime) -> Optional[dict]:
+        norm = _normalizar_gravado(bruto)
+        if norm is None:
+            return None
+        fim = _dt_de(norm.get("fim"))
+        if fim is None or fim < agora.astimezone(TZ) - timedelta(hours=RETENCAO_FORMA_H):
+            return None
+        return norm
+
     def mesclar_movi(self, jogos: List[dict], agora: datetime):
         dia = agora.astimezone(TZ).strftime("%Y-%m-%d")
-        self._abrir(dia)
+        dia_mudou = self.dia != dia
+        self.dia = dia
         novos = []
         for j in jogos or []:
             if j.get("league") != "Czech Liga Pro":
                 continue
-            quando = j.get("quando")
-            if isinstance(quando, datetime):
-                quando_dt = quando if quando.tzinfo else TZ.localize(quando)
-            else:
-                quando_dt = _ler_inicio({"inicio": quando})
-            if quando_dt is None or quando_dt.astimezone(TZ).strftime("%Y-%m-%d") != dia:
-                continue
-            novos.append({
-                "id": j.get("id") or f"{j.get('home')}|{j.get('away')}|{quando_dt.isoformat()}",
+            rec = self._registro({
+                "id": j.get("id"),
                 "home": j.get("home") or "",
                 "away": j.get("away") or "",
-                "sets_home": int(j["sets_home"]),
-                "sets_away": int(j["sets_away"]),
-                "quando": quando_dt.astimezone(TZ).isoformat(),
+                "sets_home": j.get("sets_home"),
+                "sets_away": j.get("sets_away"),
+                "inicio": j.get("inicio"),
+                "fim": j.get("fim") or j.get("quando"),
+                "quando": j.get("quando"),
+                "fim_estimado": j.get("fim_estimado"),
+                "inicio_estimado": j.get("inicio_estimado"),
                 "league": "Czech Liga Pro",
-            })
+            }, agora)
+            if rec is None:
+                continue
+            if not rec.get("id"):
+                rec["id"] = f"{rec['home']}|{rec['away']}|{rec['inicio']}"
+            novos.append(rec)
+        self._podar(agora)
         self._fundir(novos)
+        if dia_mudou:
+            self.save()
 
     def ingerir_resultados(self, resultados: List["Resultado"], agora: Optional[datetime] = None):
-        """Aproveita resultados que o ScoreMondo já trouxe, sem chamada MoviOdds extra."""
+        """Aproveita resultados que o ScoreMondo já trouxe, sem chamada MoviOdds extra.
+
+        A página só tem o horário de início. O fim é estimado pela quantidade de sets.
+        """
         agora = agora or agora_cet()
         dia = agora.astimezone(TZ).strftime("%Y-%m-%d")
-        self._abrir(dia)
+        dia_mudou = self.dia != dia
+        self.dia = dia
         novos = []
         for r in resultados or []:
             if not r.kickoff or max(r.sets_home, r.sets_away) < 3:
                 continue
             quando = r.kickoff if r.kickoff.tzinfo else TZ.localize(r.kickoff)
-            if quando.astimezone(TZ).strftime("%Y-%m-%d") != dia:
-                continue
-            novos.append({
+            rec = self._registro({
                 "id": r.match_id or f"{r.home}|{r.away}|{quando.isoformat()}",
                 "home": r.home, "away": r.away,
                 "sets_home": r.sets_home, "sets_away": r.sets_away,
-                "quando": quando.astimezone(TZ).isoformat(),
+                "inicio": quando, "fim_estimado": True,
                 "league": "Czech Liga Pro",
-            })
+            }, agora)
+            if rec:
+                novos.append(rec)
+        self._podar(agora)
         self._fundir(novos)
+        if dia_mudou:
+            self.save()
 
-    def do_jogador(self, nome: str, dia: str) -> List[dict]:
-        if self.dia != dia:
-            return []
+    def partidas_de(self, nome: str) -> List[dict]:
+        """Partidas deste jogador ainda no arquivo, com fim, início e adversário."""
         out = []
         for j in self.jogos:
-            if j.get("league") != "Czech Liga Pro":
+            if j.get("league") not in (None, "", "Czech Liga Pro"):
                 continue
-            if mesmo_jogador(j.get("home") or "", nome):
-                sf, sc = j["sets_home"], j["sets_away"]
-            elif mesmo_jogador(j.get("away") or "", nome):
-                sf, sc = j["sets_away"], j["sets_home"]
+            norm = _normalizar_gravado(j)
+            if norm is None:
+                continue
+            if mesmo_jogador(norm.get("home") or "", nome):
+                sf, sc = norm["sets_home"], norm["sets_away"]
+                adv = norm.get("away") or ""
+            elif mesmo_jogador(norm.get("away") or "", nome):
+                sf, sc = norm["sets_away"], norm["sets_home"]
+                adv = norm.get("home") or ""
             else:
                 continue
-            quando = _ler_inicio({"inicio": j.get("quando")})
-            if quando is None:
+            inicio, fim = _dt_de(norm.get("inicio")), _dt_de(norm.get("fim"))
+            if fim is None:
                 continue
+            sf, sc = int(sf), int(sc)
             out.append({
-                "resultado": classificar(int(sf), int(sc)),
-                "sets_favor": int(sf),
-                "sets_contra": int(sc),
-                "inicio": quando,
+                "resultado": classificar(sf, sc),
+                "sets_favor": sf,
+                "sets_contra": sc,
+                "inicio": inicio or fim,
+                "fim": fim,
+                "adversario": adv,
+                "fim_estimado": bool(norm.get("fim_estimado")),
             })
-        out.sort(key=lambda x: x["inicio"])
+        out.sort(key=lambda x: x["fim"])
+        return out
+
+    def do_jogador(self, nome: str, dia: str) -> List[dict]:
+        out = []
+        for p in self.partidas_de(nome):
+            ref = p.get("fim") or p.get("inicio")
+            if dia and ref is not None and _dia_local(ref) != dia:
+                ini = p.get("inicio")
+                if ini is None or _dia_local(ini) != dia:
+                    continue
+            out.append(p)
         return out
 
 class CacheSet:
@@ -964,16 +1091,30 @@ class MoviOdds:
             sh, sa = sets
             if max(sh, sa) != 3 or min(sh, sa) > 2:
                 continue
-            quando = _parse_kickoff(m.get("finished_at") or m.get("kickoff_utc"))
-            if quando is None:
+            inicio = _parse_kickoff(m.get("kickoff_utc"))
+            fim = _parse_kickoff(m.get("finished_at"))
+            fim_estimado = False
+            inicio_estimado = False
+            if fim is None and inicio is None:
                 continue
+            if fim is None:
+                # A API não mandou o fim: início + duração estimada pelo número de sets.
+                fim = estimar_fim(inicio, sh, sa)
+                fim_estimado = True
+            elif inicio is None:
+                inicio = estimar_inicio(fim, sh, sa)
+                inicio_estimado = True
             out.append({
                 "id": str(m.get("fixture_id") or "") or None,
                 "home": m.get("home") or "",
                 "away": m.get("away") or "",
                 "sets_home": sh,
                 "sets_away": sa,
-                "quando": quando,
+                "quando": fim,
+                "inicio": inicio,
+                "fim": fim,
+                "fim_estimado": fim_estimado,
+                "inicio_estimado": inicio_estimado,
                 "league": "Czech Liga Pro",
             })
         return out
@@ -1055,6 +1196,27 @@ def jogos_comecando_em(jogos: List[OddsMatch], now: datetime, segundos: float) -
         if 0 < delta <= segundos:
             return True
     return False
+
+def coletar_agenda(jogos: List[OddsMatch], agora: datetime,
+                   vistos: Optional[List[OddsMatch]] = None) -> List[OddsMatch]:
+    """Grade recente, pré-jogo e ao vivo, mais inícios já vistos nas últimas 4 h.
+
+    O bloqueio de horário anterior usa esta lista quando o resultado do jogo
+    anterior ainda não foi gravado. O próprio confronto em avaliação não entra
+    duas vezes: a chave é o par e o minuto de início.
+    """
+    agora = agora.astimezone(TZ)
+    limite = agora - timedelta(hours=JANELA_SCORE_H)
+    por: Dict[Tuple[str, str], OddsMatch] = {}
+    for o in list(vistos or []) + list(jogos or []):
+        if o is None or o.kickoff is None:
+            continue
+        ko = _kickoff_local(o.kickoff)
+        if ko < limite:
+            continue
+        chave = (chave_par(o.home, o.away), ko.strftime("%Y-%m-%d|%H:%M"))
+        por[chave] = OddsMatch(o.home, o.away, o.odd_home, o.odd_away, bool(o.in_play), o.score, ko)
+    return list(por.values())
 
 def fonte_entrada(fixtures: List[OddsMatch], odds_list: List[OddsMatch]) -> List[OddsMatch]:
     """Une fixtures do ScoreMondo e jogos do MoviOdds.
@@ -1347,60 +1509,56 @@ def _html(nome: str) -> str:
     """Escapa nome de jogador para o parse_mode HTML do Telegram."""
     return html.escape(" ".join(str(nome or "").split()), quote=False)
 
-def _rotulo(nome: str, outro: str) -> str:
-    """Primeiro nome, ou o nome inteiro se os dois jogadores compartilham o primeiro."""
-    def prim(n: str) -> str:
-        partes = str(n or "").split()
-        return partes[0] if partes else ""
-    a, b = prim(nome), prim(outro)
-    if a and a.casefold() == b.casefold():
-        return _html(nome)
-    return _html(a or nome)
-
-def _placar(entry: Optional[dict]) -> Optional[str]:
-    if not entry:
-        return None
-    sf, sc = entry.get("sets_favor"), entry.get("sets_contra")
-    if sf is None or sc is None:
-        return None
-    return f"{sf}-{sc}"
-
-def _frase_r1(nome: str, entry: Optional[dict], outro: str) -> str:
-    """'Jan venceu 3-1' / 'Petr perdeu 1-3' / 'venceu 3-2', com o nome escapado."""
-    rot = _rotulo(nome, outro)
-    if not entry:
-        return rot
-    res = entry.get("resultado") or ""
-    if res in ("limpo", "desgaste"):
-        verbo = "venceu"
-    elif res == "derrota":
-        verbo = "perdeu"
-    else:
-        verbo = ""
-    placar = _placar(entry)
-    if verbo and placar:
-        return f"{rot} {verbo} {placar}"
-    if verbo:
-        return f"{rot} {verbo}"
-    if placar:
-        return f"{rot} {placar}"
-    return rot
-
-def _resumo_r1(n1: str, h1: Optional[dict], n2: str, h2: Optional[dict]) -> str:
-    partes = []
-    if h1:
-        partes.append(_frase_r1(n1, h1, n2))
-    if h2:
-        partes.append(_frase_r1(n2, h2, n1))
-    return ", ".join(partes)
-
 def _dia_local(ref: Optional[datetime]) -> str:
     base = ref or agora_cet()
     if base.tzinfo is None:
         base = TZ.localize(base)
     return base.astimezone(TZ).strftime("%Y-%m-%d")
 
-def _jogos_do_historico(entry: Optional[dict], dia: str) -> List[dict]:
+@dataclass
+class FormaJogador:
+    nome: str
+    score_forma: float
+    jogos_hoje: int
+    vitorias_limpas_seguidas: int
+    desgaste_ultimo_jogo: bool
+    perdeu_ultimo_jogo: bool
+    partidas: List[dict]
+
+@dataclass
+class Decisao:
+    status: str
+    motivos: List[str]
+    alvo: Optional[str] = None
+    gap: Optional[float] = None
+    odd: Optional[float] = None
+    score_alvo: Optional[float] = None
+    score_adv: Optional[float] = None
+    bonus: float = 0.0
+
+def _fmt_score(n: float) -> str:
+    return f"{n:.1f}"
+
+def _partida_duplicada(novo: dict, existentes: List[dict]) -> bool:
+    for e in existentes:
+        if novo["sets_favor"] != e["sets_favor"] or novo["sets_contra"] != e["sets_contra"]:
+            continue
+        ini_n, ini_e = novo.get("inicio"), e.get("inicio")
+        if ini_n and ini_e and abs((ini_n - ini_e).total_seconds()) <= 3 * 60:
+            return True
+        adv_n, adv_e = novo.get("adversario") or "", e.get("adversario") or ""
+        if adv_n and adv_e and mesmo_jogador(adv_n, adv_e):
+            fn, fe = novo.get("fim"), e.get("fim")
+            if fn and fe and abs((fn - fe).total_seconds()) <= 2 * 3600:
+                return True
+        if not adv_n:
+            fn, fe = novo.get("fim"), e.get("fim")
+            if fn and fe and abs((fn - fe).total_seconds()) <= 15 * 60:
+                return True
+    return False
+
+def _partidas_historico(entry: Optional[dict]) -> List[dict]:
+    """Jogos do histórico local. Sem fim gravado, estima a partir do início."""
     if not entry:
         return []
     itens = entry.get("jogos") or [entry]
@@ -1408,73 +1566,196 @@ def _jogos_do_historico(entry: Optional[dict], dia: str) -> List[dict]:
     for j in itens:
         if not isinstance(j, dict):
             continue
-        ini = _ler_inicio(j) or _ler_inicio(entry)
         sf, sc = j.get("sets_favor"), j.get("sets_contra")
-        if ini is None or _dia_local(ini) != dia or sf is None or sc is None:
+        if sf is None or sc is None:
             continue
         sf, sc = int(sf), int(sc)
+        if classificar(sf, sc) == "nao":
+            continue
+        ini = _ler_inicio(j) or _ler_inicio(entry)
+        if ini is None:
+            continue
+        fim = _dt_de(j.get("fim"))
+        estimado = fim is None
+        if fim is None:
+            fim = estimar_fim(ini, sf, sc)
         out.append({
             "resultado": j.get("resultado") or classificar(sf, sc),
             "sets_favor": sf,
             "sets_contra": sc,
             "inicio": ini,
+            "fim": fim,
+            "adversario": j.get("adversario") or "",
+            "fim_estimado": estimado,
         })
-    out.sort(key=lambda j: j["inicio"])
     return out
 
-def _jogos_do_jogador(nome: str, hist: Historico, forma: Optional[FormaDia], dia: str) -> List[dict]:
-    jogos = forma.do_jogador(nome, dia) if forma is not None else []
-    vistos = set()
-    for j in jogos:
-        vistos.add((j["inicio"].strftime("%Y-%m-%d %H:%M"), j["sets_favor"], j["sets_contra"]))
+def partidas_do_jogador(nome: str, hist: Optional[Historico],
+                        forma: Optional[FormaDia]) -> List[dict]:
+    """Forma do MoviOdds primeiro (tem adversário e fim). O histórico só completa."""
+    jogos = forma.partidas_de(nome) if forma is not None else []
     entry = hist.get(nome) if hist is not None else None
-    for j in _jogos_do_historico(entry, dia):
-        chave = (j["inicio"].strftime("%Y-%m-%d %H:%M"), j["sets_favor"], j["sets_contra"])
-        if chave in vistos:
-            continue
-        vistos.add(chave)
-        jogos.append(j)
-    jogos.sort(key=lambda j: j["inicio"])
+    for j in _partidas_historico(entry):
+        if not _partida_duplicada(j, jogos):
+            jogos.append(j)
+    jogos.sort(key=lambda j: j.get("fim") or j.get("inicio"))
     return jogos
 
-def _placar_jogador(j: dict) -> str:
-    return f"{j['sets_favor']}-{j['sets_contra']}"
+def metricas_forma(nome: str, partidas: List[dict], agora: datetime) -> FormaJogador:
+    """score nos últimos 2–3 jogos de 4 h; jogos_hoje conta os finalizados em 3 h."""
+    agora = _kickoff_local(agora)
+    limite_4h = agora - timedelta(hours=JANELA_SCORE_H)
+    dentro = []
+    for p in partidas or []:
+        fim = p.get("fim")
+        if fim is None and p.get("inicio") is not None:
+            fim = estimar_fim(p["inicio"], p["sets_favor"], p["sets_contra"])
+        if fim is None:
+            continue
+        fim = _kickoff_local(fim)
+        if fim > agora or fim < limite_4h:
+            continue
+        q = dict(p)
+        q["fim"] = fim
+        if q.get("inicio") is not None:
+            q["inicio"] = _kickoff_local(q["inicio"])
+        dentro.append(q)
+    dentro.sort(key=lambda p: p["fim"])
+    recentes = dentro[-MAX_JOGOS_SCORE:]
+    score = sum(peso_sets(p["sets_favor"], p["sets_contra"]) for p in recentes)
+    limite_3h = agora - timedelta(hours=JANELA_JOGOS_H)
+    jogos_hoje = sum(1 for p in dentro if p["fim"] >= limite_3h)
+    streak = 0
+    for p in reversed(recentes):
+        if int(p["sets_favor"]) == 3 and int(p["sets_contra"]) in (0, 1):
+            streak += 1
+        else:
+            break
+    desgaste = False
+    perdeu = False
+    if recentes:
+        ult = recentes[-1]
+        perdeu = int(ult["sets_contra"]) == 3
+        cinco = int(ult["sets_favor"]) + int(ult["sets_contra"]) == 5
+        minutos = (agora - ult["fim"]).total_seconds() / 60.0
+        desgaste = bool(cinco and minutos < DESGASTE_MIN)
+    return FormaJogador(nome, score, jogos_hoje, streak, desgaste, perdeu, dentro)
 
-def _so_vitorias(jogos: List[dict]) -> bool:
-    return bool(jogos) and all(j["resultado"] in ("limpo", "desgaste") for j in jogos)
+def _mapa_adversarios(partidas: List[dict], agora: datetime) -> Dict[tuple, dict]:
+    limite = _kickoff_local(agora) - timedelta(hours=JANELA_TRIANG_H)
+    out: Dict[tuple, dict] = {}
+    for p in partidas or []:
+        nome = p.get("adversario") or ""
+        fim = p.get("fim")
+        if not nome or fim is None or _kickoff_local(fim) < limite:
+            continue
+        chave = tuple(sorted(norm_nome(nome)))
+        if not chave:
+            continue
+        atual = out.get(chave)
+        if atual is None or _kickoff_local(fim) >= _kickoff_local(atual["fim"]):
+            out[chave] = p
+    return out
 
-def _so_derrotas(jogos: List[dict]) -> bool:
-    return bool(jogos) and all(j["resultado"] == "derrota" for j in jogos)
+def bonus_triangulacao(alvo: FormaJogador, adv: FormaJogador, agora: datetime) -> float:
+    """Adversário comum nas últimas 3 h. +2.0 ou +1.0 por C, sem somar os dois no mesmo C."""
+    ma = _mapa_adversarios(alvo.partidas, agora)
+    mb = _mapa_adversarios(adv.partidas, agora)
+    total = 0.0
+    for chave in ma.keys() & mb.keys():
+        pa, pb = ma[chave], mb[chave]
+        a_sf, a_sc = int(pa["sets_favor"]), int(pa["sets_contra"])
+        b_sf, b_sc = int(pb["sets_favor"]), int(pb["sets_contra"])
+        if (a_sf, a_sc) in ((3, 0), (3, 1)) and (b_sf, b_sc) in ((0, 3), (1, 3)):
+            total += 2.0
+        elif (a_sf, a_sc) == (3, 0) and b_sf + b_sc == 5:
+            total += 1.0
+    return total
 
-def _derrotas(jogos: List[dict]) -> List[dict]:
-    return [j for j in jogos if j["resultado"] == "derrota"]
+def _na_janela_anterior(inicio: Optional[datetime], kickoff: datetime) -> bool:
+    if inicio is None:
+        return False
+    ini = _kickoff_local(inicio)
+    ko = _kickoff_local(kickoff)
+    return ko - timedelta(minutes=SLOT_ANTERIOR_MIN) <= ini < ko
 
-def _tem_3_2(jogos: List[dict]) -> bool:
-    return any(j["sets_favor"] == 3 and j["sets_contra"] == 2 for j in jogos)
+def _eh_este_confronto(o: OddsMatch, nome: str, adversario: str, kickoff: datetime) -> bool:
+    if not adversario or o.kickoff is None:
+        return False
+    mesmo_par = (
+        (mesmo_jogador(o.home, nome) and mesmo_jogador(o.away, adversario))
+        or (mesmo_jogador(o.home, adversario) and mesmo_jogador(o.away, nome))
+    )
+    if not mesmo_par:
+        return False
+    # Até 10 min de diferença no mesmo par é o próprio jogo (fontes divergem o apito).
+    return abs((_kickoff_local(o.kickoff) - _kickoff_local(kickoff)).total_seconds()) <= 10 * 60
 
-def _limpas(jogos: List[dict]) -> List[dict]:
-    return [j for j in jogos if j["sets_favor"] == 3 and j["sets_contra"] <= 1]
+def jogou_no_horario_anterior(nome: str, kickoff: Optional[datetime],
+                              partidas: List[dict],
+                              agenda: Optional[List[OddsMatch]] = None,
+                              adversario: str = "") -> bool:
+    """True se o jogador começou outro jogo nos 45 min anteriores a este apito.
 
-def _feias(jogos: List[dict]) -> List[dict]:
-    return [j for j in jogos if j["sets_contra"] == 3 and j["sets_favor"] in (0, 1)]
+    Vale o início gravado no resultado e também a grade (odds/fixtures), para
+    o caso em que o jogo anterior ainda não tem placar.
+    """
+    if kickoff is None or not nome:
+        return False
+    for p in partidas or []:
+        if _na_janela_anterior(p.get("inicio"), kickoff):
+            return True
+    for o in agenda or []:
+        if o is None or o.kickoff is None:
+            continue
+        if not (mesmo_jogador(o.home, nome) or mesmo_jogador(o.away, nome)):
+            continue
+        if _eh_este_confronto(o, nome, adversario, kickoff):
+            continue
+        if _na_janela_anterior(o.kickoff, kickoff):
+            return True
+    return False
 
-def _texto_limpas(n: int) -> str:
-    if n == 1:
-        return "⏳ favorito só tem 1 vitória limpa hoje, precisa de 2"
-    return f"⏳ favorito só tem {n} vitórias limpas hoje, precisa de 2"
+def _motivos_verde(alvo: FormaJogador, adv: FormaJogador, odd: float,
+                   gap: float, bonus: float) -> List[str]:
+    return [
+        f"✓ Alvo: <b>{_html(alvo.nome)}</b> (odd {odd:.2f}) — score_forma {_fmt_score(alvo.score_forma)}",
+        f"✓ Adversário: <b>{_html(adv.nome)}</b> — score_forma {_fmt_score(adv.score_forma)}",
+        f"✓ Gap: {_fmt_score(gap)} (bônus triangulação +{_fmt_score(bonus)})",
+    ]
 
-def _linha_hoje(fav: str, jogos_fav: List[dict], jogos_und: List[dict]) -> str:
-    sf = ", ".join(_placar_jogador(j) for j in jogos_fav)
-    su = ", ".join(_placar_jogador(j) for j in jogos_und)
-    return f"{_html(fav)} hoje: {sf} | Adversário hoje: {su}"
-
-def _resumo_jogos(n1: str, j1: List[dict], n2: str, j2: List[dict]) -> str:
-    def parte(nome, jogos, outro):
-        if len(jogos) == 1:
-            return _frase_r1(nome, jogos[0], outro)
-        scores = ", ".join(_placar_jogador(j) for j in jogos)
-        return f"{_rotulo(nome, outro)} hoje: {scores}"
-    return ", ".join(p for p in (parte(n1, j1, n2), parte(n2, j2, n1)) if p)
+def decidir_entrada(a: FormaJogador, b: FormaJogador,
+                    odd_a: Optional[float], odd_b: Optional[float],
+                    agora: datetime,
+                    anterior_a: bool = False,
+                    anterior_b: bool = False) -> Decisao:
+    """Pseudocódigo do filtro. Empate de score_forma escolhe o jogador B."""
+    if a.jogos_hoje < 1 or b.jogos_hoje < 1:
+        return Decisao("indefinido", ["PASSAR (Sem dados do dia)"])
+    if a.score_forma > b.score_forma:
+        alvo, adv, odd, anterior = a, b, odd_a, anterior_a
+    else:
+        alvo, adv, odd, anterior = b, a, odd_b, anterior_b
+    if odd is None or not (odd > 1):
+        return Decisao("bloqueado", ["PASSAR (Sem odds de mercado)"])
+    if odd < ODD_MIN_ALVO or odd > ODD_MAX_ALVO:
+        return Decisao("bloqueado", [f"PASSAR (Odd fora da faixa: {odd:.2f})"])
+    if alvo.perdeu_ultimo_jogo or alvo.vitorias_limpas_seguidas < 2:
+        return Decisao("bloqueado", ["PASSAR (Sem domínio comprovado)"])
+    if alvo.desgaste_ultimo_jogo:
+        return Decisao("bloqueado", ["PASSAR (Alvo vem de 5 sets)"])
+    if anterior:
+        return Decisao("bloqueado", ["PASSAR (jogou no horário anterior)"])
+    if a.score_forma >= SCORE_AMBOS_VITORIAS and b.score_forma >= SCORE_AMBOS_VITORIAS:
+        return Decisao("bloqueado", ["PASSAR (Ambos vêm de vitórias)"])
+    bonus = bonus_triangulacao(alvo, adv, agora)
+    gap = (alvo.score_forma - adv.score_forma) + bonus
+    if gap >= GAP_MIN and adv.score_forma <= 0:
+        return Decisao(
+            "verde", _motivos_verde(alvo, adv, odd, gap, bonus),
+            alvo.nome, gap, odd, alvo.score_forma, adv.score_forma, bonus,
+        )
+    return Decisao("bloqueado", ["PASSAR (Desnível insuficiente)"])
 
 def _odds_do_par(player1: str, player2: str, odds_map: Dict[str, OddsMatch]):
     om = achar_odds(player1, player2, [o for o in odds_map.values() if not o.in_play])
@@ -1484,71 +1765,42 @@ def _odds_do_par(player1: str, player2: str, odds_map: Dict[str, OddsMatch]):
         return om.odd_away, om.odd_home
     return None, None
 
+def analisar_confronto(player1: str, player2: str, hist: Historico,
+                       odds_map: Dict[str, OddsMatch],
+                       kickoff: Optional[datetime] = None,
+                       forma: Optional[FormaDia] = None,
+                       agenda: Optional[List[OddsMatch]] = None,
+                       agora: Optional[datetime] = None) -> Decisao:
+    agora = agora or agora_cet()
+    if agenda is None:
+        agenda = list(odds_map.values()) if odds_map else []
+    p1 = partidas_do_jogador(player1, hist, forma)
+    p2 = partidas_do_jogador(player2, hist, forma)
+    a = metricas_forma(player1, p1, agora)
+    b = metricas_forma(player2, p2, agora)
+    odd1, odd2 = _odds_do_par(player1, player2, odds_map or {})
+    ant1 = jogou_no_horario_anterior(player1, kickoff, p1, agenda, player2)
+    ant2 = jogou_no_horario_anterior(player2, kickoff, p2, agenda, player1)
+    return decidir_entrada(a, b, odd1, odd2, agora, ant1, ant2)
+
 def avaliar(m, hist: Historico, odds_map: Dict[str, OddsMatch],
-            forma: Optional[FormaDia] = None) -> Tuple[str, List[str], Optional[str]]:
+            forma: Optional[FormaDia] = None,
+            agenda: Optional[List[OddsMatch]] = None,
+            agora: Optional[datetime] = None) -> Tuple[str, List[str], Optional[str]]:
     """Aplica as regras a qualquer objeto com .player1 e .player2 (LiveMatch ou OddsMatch)."""
     return avaliar_par(m.player1, m.player2, hist, odds_map,
-                       kickoff=getattr(m, "kickoff", None), forma=forma)
+                       kickoff=getattr(m, "kickoff", None), forma=forma,
+                       agenda=agenda, agora=agora)
 
 def avaliar_par(player1: str, player2: str, hist: Historico,
                 odds_map: Dict[str, OddsMatch],
                 kickoff: Optional[datetime] = None,
-                forma: Optional[FormaDia] = None) -> Tuple[str, List[str], Optional[str]]:
-    """Filtro rígido pela forma do dia. O favorito sai só das odds deste jogo."""
-    dia = _dia_local(kickoff)
-    j1 = _jogos_do_jogador(player1, hist, forma, dia)
-    j2 = _jogos_do_jogador(player2, hist, forma, dia)
-    if not j1 or not j2:
-        faltam = [n for n, j in ((player1, j1), (player2, j2)) if not j]
-        quem = " e ".join(_html(n) for n in faltam)
-        return "indefinido", [f"sem jogo finalizado hoje de {quem}"], None
-
-    resumo = _resumo_jogos(player1, j1, player2, j2)
-    odd1, odd2 = _odds_do_par(player1, player2, odds_map)
-    fav = None
-    if odd1 and odd2 and odd1 != odd2 and min(odd1, odd2) <= ODD_MAX_FAVORITO:
-        if odd1 < odd2:
-            fav = (player1, player2, j1, j2, odd1)
-        else:
-            fav = (player2, player1, j2, j1, odd2)
-
-    if _so_derrotas(j1) and _so_derrotas(j2):
-        return "bloqueado", [f"Duelo de Perdedores (Regra 3): {resumo}"], None
-
-    if fav:
-        fav_nome, _und, jf, _ju, odd_fav = fav
-        perdas = _derrotas(jf)
-        if perdas:
-            placar = ", ".join(_placar_jogador(j) for j in perdas)
-            return "bloqueado", [
-                f"❌ favorito {_html(fav_nome)} já perdeu hoje ({placar}) — odd {odd_fav:.2f} ignorada"
-            ], None
-        if _tem_3_2(jf):
-            return "bloqueado", ["⚠️ alerta amarelo: vitória sofrida 3-2"], None
-
-    if _so_vitorias(j1) and _so_vitorias(j2):
-        return "bloqueado", [f"Duelo de Vencedores (Regra 2): {resumo}"], None
-
-    if not odd1 or not odd2:
-        return "bloqueado", [f"sem odds de mercado: {resumo}" if resumo else "sem odds de mercado"], None
-    if fav is None:
-        return "bloqueado", [
-            f"odds {odd1:.2f} x {odd2:.2f}, sem favorito claro (máx {ODD_MAX_FAVORITO:.2f}): {resumo}"
-        ], None
-
-    fav_nome, _und_nome, jf, ju, odd_fav = fav
-    limpas = _limpas(jf)
-    if len(limpas) < 2:
-        return "indefinido", [_texto_limpas(len(limpas))], None
-    if not _feias(ju):
-        return "bloqueado", ["❌ adversário sem derrota feia hoje"], None
-
-    motivos = [
-        f"✓ {_linha_hoje(fav_nome, jf, ju)}",
-        f"✓ Favorito: <b>{_html(fav_nome)}</b> (odd {odd_fav:.2f})",
-        f"✓ Odds: {_html(player1)} {odd1:.2f} x {_html(player2)} {odd2:.2f}",
-    ]
-    return "verde", motivos, fav_nome
+                forma: Optional[FormaDia] = None,
+                agenda: Optional[List[OddsMatch]] = None,
+                agora: Optional[datetime] = None) -> Tuple[str, List[str], Optional[str]]:
+    """Filtro por score_forma. O alvo é quem tem a melhor forma, não a odd menor."""
+    d = analisar_confronto(player1, player2, hist, odds_map, kickoff, forma, agenda, agora)
+    return d.status, d.motivos, d.alvo
 
 def montar_odds_map(odds_list: List[OddsMatch]) -> Dict[str, OddsMatch]:
     return {f"{o.home}|{o.away}".lower(): o for o in odds_list}
@@ -1733,9 +1985,6 @@ def _linha_sem_entrada(o: OddsMatch, status: str, motivos: List[str], extras: Op
         linha += "\n" + "\n".join(extras)
     return linha
 
-def _adversario_de(fav: str, p1: str, p2: str) -> str:
-    return p2 if mesmo_jogador(fav, p1) else p1
-
 def _linhas_historico(hist, home: str, away: str, universo: List[str]) -> List[str]:
     """Forma 7d e H2H 14d lidos do cache. Sem chave, sem casamento único ou sem jogos: nada."""
     if hist is None or not getattr(hist, "ativo", False):
@@ -1757,27 +2006,19 @@ def _linhas_historico(hist, home: str, away: str, universo: List[str]) -> List[s
         log.warning("SportsAPI365: histórico ignorado (%s)", type(exc).__name__)
         return []
 
-def _h2h_bloqueia(hist, fav: Optional[str], p1: str, p2: str, universo: List[str]) -> bool:
-    """Critério extra, só de bloqueio. Não altera o filtro da forma do dia."""
-    if hist is None or not getattr(hist, "ativo", False) or not fav:
-        return False
-    try:
-        return bool(hist.perdeu_ultimos_2(fav, _adversario_de(fav, p1, p2), universo, agora_cet()))
-    except Exception as exc:
-        log.warning("SportsAPI365: histórico ignorado (%s)", type(exc).__name__)
-        return False
-
 def montar_mensagem_entrada(slot_key: str, confrontos: List[OddsMatch], hist: Historico,
                             odds_list: List[OddsMatch],
                             forma: Optional[FormaDia] = None,
                             historico_anterior: Optional[HistoricoSportsAPI365] = None,
+                            agenda: Optional[List[OddsMatch]] = None,
                             ) -> Tuple[List[str], list, List[OddsMatch]]:
     """Retorna (textos, verdes, avaliados_definitivos). Cada texto cabe no Telegram.
 
-    historico_anterior só acrescenta contexto e, no máximo, troca um verde pelo
-    bloqueio de H2H. Sem o argumento, a mensagem é a do filtro rígido.
+    historico_anterior só acrescenta as linhas de Histórico 7d e H2H 14d.
+    Verdes saem ordenados pelo maior gap. Sem verde, a mensagem diz NENHUMA.
     """
     odds_map = montar_odds_map(odds_list)
+    grade = odds_list if agenda is None else agenda
     hora = _alvo_bloco(slot_key).split("|", 1)[1]
     cab = f"🎯 <b>ENTRADA {hora}</b> — Czech Liga Pro {hora} CET"
 
@@ -1785,22 +2026,24 @@ def montar_mensagem_entrada(slot_key: str, confrontos: List[OddsMatch], hist: Hi
         return [], [], []
 
     universo = [n for o in confrontos for n in (o.home, o.away)]
-    verdes, definitivos, blocos, linhas = [], [], [], []
+    avaliados = []
     for o in confrontos:
-        status, motivos, fav = avaliar(o, hist, odds_map, forma)
-        if status == "verde" and _h2h_bloqueia(historico_anterior, fav, o.home, o.away, universo):
-            adv = _adversario_de(fav, o.home, o.away)
-            status, motivos, fav = "bloqueado", [
-                f"❌ H2H: favorito perdeu os 2 últimos para {_html(adv)}"
-            ], None
+        d = analisar_confronto(o.home, o.away, hist, odds_map, o.kickoff, forma, grade)
         extras = _linhas_historico(historico_anterior, o.home, o.away, universo)
-        if status in ("verde", "bloqueado"):
+        avaliados.append((o, d, extras))
+    verdes_raw = [item for item in avaliados if item[1].status == "verde"]
+    verdes_raw.sort(key=lambda item: item[1].gap or 0.0, reverse=True)
+    fora = [item for item in avaliados if item[1].status != "verde"]
+
+    verdes, definitivos, blocos, linhas = [], [], [], []
+    for o, d, extras in verdes_raw:
+        definitivos.append(o)
+        verdes.append((o, d.alvo))
+        blocos.append(_bloco_verde(o, d.alvo, d.motivos, extras))
+    for o, d, extras in fora:
+        if d.status == "bloqueado":
             definitivos.append(o)
-        if status == "verde":
-            verdes.append((o, fav))
-            blocos.append(_bloco_verde(o, fav, motivos, extras))
-        else:
-            linhas.append(_linha_sem_entrada(o, status, motivos, extras))
+        linhas.append(_linha_sem_entrada(o, d.status, d.motivos, extras))
 
     aviso = "" if verdes else "Entrada: NENHUMA — sem desnível claro nesta rodada"
     rodape = f"⏰ {agora_cet().strftime('%H:%M:%S')} CET"
@@ -1810,7 +2053,8 @@ def montar_mensagem_entrada(slot_key: str, confrontos: List[OddsMatch], hist: Hi
 def processar_entrada(slot_key: str, hist: Historico, sinais: CacheSet, entradas: CacheSet,
                       tg: Telegram, odds_list: List[OddsMatch], apostas: "Apostas" = None,
                       forma: Optional[FormaDia] = None,
-                      historico_anterior: Optional[HistoricoSportsAPI365] = None) -> bool:
+                      historico_anterior: Optional[HistoricoSportsAPI365] = None,
+                      agenda: Optional[List[OddsMatch]] = None) -> bool:
     if entradas.has(slot_key):
         return False
     confrontos = confrontos_do_bloco(odds_list, slot_key)
@@ -1818,7 +2062,7 @@ def processar_entrada(slot_key: str, hist: Historico, sinais: CacheSet, entradas
         log.info("[ENTRADA %s] 0 jogos avaliados, 0 aprovados", _alvo_bloco(slot_key))
         return False
     textos, verdes, definitivos = montar_mensagem_entrada(
-        slot_key, confrontos, hist, odds_list, forma, historico_anterior)
+        slot_key, confrontos, hist, odds_list, forma, historico_anterior, agenda)
     log.info("[ENTRADA %s] %s jogos avaliados, %s aprovados",
              _alvo_bloco(slot_key), len(confrontos), len(verdes))
     if not textos:
@@ -1846,9 +2090,9 @@ def processar_entrada(slot_key: str, hist: Historico, sinais: CacheSet, entradas
 def processar(matches: List[LiveMatch], hist: Historico, finished: CacheSet,
               sinais: CacheSet, tg: Telegram, modo: str, odds_list: List[OddsMatch],
               apostas: "Apostas" = None, forma: Optional[FormaDia] = None,
-              historico_anterior: Optional[HistoricoSportsAPI365] = None):
+              historico_anterior: Optional[HistoricoSportsAPI365] = None,
+              agenda: Optional[List[OddsMatch]] = None):
     dia = agora_cet().strftime("%Y-%m-%d")
-    universo = [n for m in matches for n in (m.player1, m.player2)]
 
     for m in matches:
         key_m = f"{dia}|{m.player1}|{m.player2}|{m.score1}:{m.score2}"
@@ -1884,9 +2128,7 @@ def processar(matches: List[LiveMatch], hist: Historico, finished: CacheSet,
             if getattr(m, "kickoff", None) is None:
                 m.kickoff = kickoff
             odds_map = montar_odds_map([o for o in odds_list if not o.in_play])
-            status, motivos, fav = avaliar(m, hist, odds_map, forma)
-            if status == "verde" and _h2h_bloqueia(historico_anterior, fav, m.player1, m.player2, universo):
-                status = "bloqueado"
+            status, motivos, fav = avaliar(m, hist, odds_map, forma, agenda=agenda or odds_list)
             if status == "verde":
                 texto = (
                     f"🚨 <b>SINAL VERDE</b> (ao vivo)\n\n"
@@ -2132,7 +2374,7 @@ def texto_entradas_hoje(apostas: Apostas) -> str:
 HORARIOS_TXT = (
     "Somente <b>Czech Liga Pro</b>, 24 h (madrugada inclusive)\n"
     "🎯 ENTRADA: <b>≈5 min antes de cada bloco</b> de início\n"
-    "Forma do dia desde 00:00 CET"
+    "Forma: últimos 2–3 jogos em 4 h · odd do alvo 1.25–1.85"
 )
 
 AJUDA_TXT = (
@@ -2505,6 +2747,7 @@ def main():
     ultimo_aviso_conflito = 0.0
     ultimo_fixtures = 0.0
     fixtures_cache: List[OddsMatch] = []
+    agenda_vista: List[OddsMatch] = []
     odds_cache = CacheOdds(persistir=True)
     resultados_cache = CacheOdds()
     forma = FormaDia()
@@ -2551,6 +2794,8 @@ def main():
             odds_now = talvez_odds_imediatas(moviodds, odds_cache, previa)
             fonte = fonte_entrada(fixtures_cache, odds_now)
             agora_local = agora_cet()
+            # Pré-jogo e ao vivo: o horário anterior vale mesmo sem placar gravado.
+            agenda_vista = coletar_agenda(list(fixtures_cache) + list(odds_now or []), agora_local, agenda_vista)
             if blocos_devidos(fonte, agora_local):
                 registrar_resultados_r1(_trazer_resultados(scoremondo, forma), hist, finished, odds_now)
             for slot, _jogos in blocos_devidos(fonte, agora_local):
@@ -2560,7 +2805,7 @@ def main():
                     continue
                 tentativas_entrada[slot] = time.time()
                 processar_entrada(slot, hist, sinais, entradas, tg, fonte, apostas, forma,
-                                  historico_anterior)
+                                  historico_anterior, agenda_vista)
 
             agora_ts = time.time()
             vivos_terminados: List[Resultado] = []
@@ -2573,7 +2818,7 @@ def main():
                 log.info(f"[{modo}] partidas={len(matches)} | odds={len(odds_list)}")
                 if matches:
                     processar(matches, hist, finished, sinais, tg, modo, odds_list, apostas, forma,
-                              historico_anterior)
+                              historico_anterior, agenda_vista)
                 vivos_terminados = [Resultado(m.player1, m.player2, m.score1, m.score2, None, "live")
                                     for m in matches if m.finished]
 
