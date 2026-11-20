@@ -41,6 +41,7 @@ Interativo (v5) — tudo vai para o GRUPO (TELEGRAM_GROUP_ID):
   • GREEN ✅ / RED ❌ de cada entrada assim que o jogo termina + placar do dia
     (entrada sem resultado após 3 h = anulada, não conta)
   • Resumo do dia às 22:30 (por rodada + acumulado do mês) com aviso +18
+  • Resumo das entradas às 00:05 Europe/Prague (dia anterior, stake 1 un)
   • Saudações 07:50 (bom dia), 12:40 (boa tarde), 22:35 (boa noite) com frase motivacional
   • Responde bom dia/boa tarde/boa noite/oi/obrigado e menções ao bot (com limite por pessoa)
   • Comandos de todos: /placar /semana /mes /entradas /ajuda /id
@@ -88,7 +89,7 @@ import requests
 from bs4 import BeautifulSoup
 import pytz
 
-from historico_sportsapi365 import HistoricoSportsAPI365
+from historico_sportsapi365 import HistoricoSportsAPI365, TZ_PRAGA, nomes_compativeis
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CONFIGURAÇÃO
@@ -111,6 +112,7 @@ ENVIADOS_FILE = DATA_DIR / "sinais_enviados_v4.json"
 FINISHED_FILE = DATA_DIR / "finished_cache_v4.json"
 ENTRADAS_FILE = DATA_DIR / "entradas_enviadas_v4.json"
 APOSTAS_FILE = DATA_DIR / "apostas_v5.json"      # entradas + green/red
+ENTRADAS_SALDO_FILE = DATA_DIR / "entradas_v5.json"  # entradas aprovadas e o resumo das 00:05
 EVENTOS_FILE = DATA_DIR / "eventos_v5.json"      # resumo/saudações já enviados
 FORMA_FILE = DATA_DIR / "forma_dia_v5.json"      # jogos finalizados do dia (MoviOdds)
 ODDS_CACHE_FILE = DATA_DIR / "odds_cache_v5.json"  # última consulta de odds (sobrevive a reinício)
@@ -2053,7 +2055,8 @@ def processar_entrada(slot_key: str, hist: Historico, sinais: CacheSet, entradas
                       tg: Telegram, odds_list: List[OddsMatch], apostas: "Apostas" = None,
                       forma: Optional[FormaDia] = None,
                       historico_anterior: Optional[HistoricoSportsAPI365] = None,
-                      agenda: Optional[List[OddsMatch]] = None) -> bool:
+                      agenda: Optional[List[OddsMatch]] = None,
+                      livro: Optional["LivroEntradas"] = None) -> bool:
     if entradas.has(slot_key):
         return False
     confrontos = confrontos_do_bloco(odds_list, slot_key)
@@ -2080,6 +2083,9 @@ def processar_entrada(slot_key: str, hist: Historico, sinais: CacheSet, entradas
         bloco = f"{bloco_dt.hour:02d}"
         for o, fav in verdes:
             apostas.add(o.home, o.away, fav, bloco, f"{bloco_dt.minute:02d}", o.kickoff)
+    if livro is not None:
+        for o, fav in verdes:
+            livro.registrar(o.home, o.away, fav, o.kickoff, _odd_do_jogador(fav, o))
     return True
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2090,7 +2096,8 @@ def processar(matches: List[LiveMatch], hist: Historico, finished: CacheSet,
               sinais: CacheSet, tg: Telegram, modo: str, odds_list: List[OddsMatch],
               apostas: "Apostas" = None, forma: Optional[FormaDia] = None,
               historico_anterior: Optional[HistoricoSportsAPI365] = None,
-              agenda: Optional[List[OddsMatch]] = None):
+              agenda: Optional[List[OddsMatch]] = None,
+              livro: Optional["LivroEntradas"] = None):
     dia = agora_cet().strftime("%Y-%m-%d")
 
     for m in matches:
@@ -2139,6 +2146,8 @@ def processar(matches: List[LiveMatch], hist: Historico, finished: CacheSet,
                     sinais.add(key_s)
                     if apostas is not None:
                         apostas.add(m.player1, m.player2, fav, f"{agora_cet().hour:02d}", "ao_vivo")
+                    if livro is not None:
+                        livro.registrar(m.player1, m.player2, fav, kickoff, odd)
                     log.info("SINAL VERDE (ao vivo) → %s vs %s | %s",
                              m.player1, m.player2, " ; ".join(motivos))
 
@@ -2512,6 +2521,291 @@ def frase_motivacional() -> str:
     del _ultimas_frases[:-10]
     return FRASES[i]
 
+# Resumo das entradas do dia anterior, cerca de 00:05 Europe/Prague.
+RESUMO_HORA = (0, 5)
+RESUMO_JANELA_MIN = 15  # 00:05 até 00:20, para um reinício curto ainda alcançar
+
+class LivroEntradas:
+    """Entradas aprovadas que saíram no Telegram, em DATA_DIR/entradas_v5.json.
+
+    Cada item guarda dia, horário do bloco, confronto, alvo, adversário e odd.
+    `ultimo_resumo` é o dia (YYYY-MM-DD) que já teve o resumo das 00:05.
+    """
+    def __init__(self, path: Optional[Path] = None):
+        self.path = path or ENTRADAS_SALDO_FILE
+        self.itens: List[dict] = []
+        self.ultimo_resumo = ""
+        self.load()
+
+    def load(self):
+        if not self.path.exists():
+            return
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if not isinstance(raw, dict):
+            return
+        self.itens = [e for e in (raw.get("itens") or []) if isinstance(e, dict)]
+        self.ultimo_resumo = str(raw.get("ultimo_resumo") or "")
+
+    def save(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({
+            "ultimo_resumo": self.ultimo_resumo,
+            "itens": self.itens,
+        }, ensure_ascii=False, indent=1), encoding="utf-8")
+        tmp.replace(self.path)
+
+    def get(self, id_: str) -> Optional[dict]:
+        return next((e for e in self.itens if e.get("id") == id_), None)
+
+    def registrar(self, home: str, away: str, alvo: str, kickoff: Optional[datetime],
+                  odd: Optional[float]) -> bool:
+        """Grava uma entrada já enviada. Repetir o mesmo confronto no dia não duplica."""
+        if kickoff is None or odd is None:
+            return False
+        ref = kickoff.astimezone(TZ) if kickoff.tzinfo else TZ.localize(kickoff)
+        dia = ref.strftime("%Y-%m-%d")
+        id_ = chave_sinal(home, away, dia)
+        if self.get(id_):
+            return False
+        adversario = _adversario_do_alvo(alvo, home, away)
+        self.itens.append({
+            "id": id_,
+            "dia": dia,
+            "hora": ref.strftime("%H:%M"),
+            "inicio": ref.isoformat(),
+            "home": home,
+            "away": away,
+            "alvo": alvo,
+            "adversario": adversario,
+            "odd": round(float(odd), 2),
+            "status": "pendente",
+            "placar": None,
+            "incluido": False,
+            "resultado_avisado": False,
+        })
+        self.save()
+        log.info("[ENTRADA] registrada %s %s %s x %s alvo=%s odd=%.2f",
+                 dia, ref.strftime("%H:%M"), home, away, alvo, float(odd))
+        return True
+
+    def pendentes(self) -> List[dict]:
+        return [e for e in self.itens if e.get("status") == "pendente"]
+
+    def do_dia(self, dia: str) -> List[dict]:
+        return [e for e in self.itens if e.get("dia") == dia]
+
+
+def _inicio_entrada(entrada: dict) -> Optional[datetime]:
+    return _dt_de(entrada.get("inicio")) or _dt_de(f"{entrada.get('dia')}T{entrada.get('hora')}:00")
+
+
+def _par_da_entrada(entrada: dict, home: str, away: str) -> bool:
+    return (
+        (mesmo_jogador(home, entrada.get("home") or "") and mesmo_jogador(away, entrada.get("away") or ""))
+        or (mesmo_jogador(home, entrada.get("away") or "") and mesmo_jogador(away, entrada.get("home") or ""))
+    )
+
+
+def _perto_do_inicio(inicio: Optional[datetime], referencia: Optional[datetime], minutos: int = 45) -> bool:
+    if inicio is None or referencia is None:
+        return False
+    return abs((inicio - referencia).total_seconds()) <= minutos * 60
+
+
+def _aplicar_placar(entrada: dict, sets_home: int, sets_away: int, home: str, away: str,
+                    agora: datetime) -> bool:
+    if max(sets_home, sets_away) != 3:
+        return False
+    alvo = entrada.get("alvo") or ""
+    if mesmo_jogador(alvo, home) or _nome_resultado(alvo, home):
+        sa, so = sets_home, sets_away
+    elif mesmo_jogador(alvo, away) or _nome_resultado(alvo, away):
+        sa, so = sets_away, sets_home
+    else:
+        return False
+    entrada["status"] = "green" if sa > so else "red"
+    entrada["placar"] = f"{sets_home}-{sets_away}"
+    entrada["resolvido"] = agora.astimezone(TZ).isoformat(timespec="seconds")
+    return True
+
+
+def _nome_resultado(nosso: str, outro: str) -> bool:
+    if not nosso or not outro:
+        return False
+    if mesmo_jogador(nosso, outro):
+        return True
+    try:
+        return bool(nomes_compativeis(nosso, outro))
+    except Exception:
+        return False
+
+
+def _liquidar_pela_forma(entrada: dict, forma: Optional[FormaDia], agora: datetime) -> bool:
+    if forma is None:
+        return False
+    ref = _inicio_entrada(entrada)
+    melhor = None
+    melhor_delta = None
+    for jogo in forma.jogos or []:
+        home, away = jogo.get("home") or "", jogo.get("away") or ""
+        if not _par_da_entrada(entrada, home, away):
+            continue
+        try:
+            sh, sa = int(jogo["sets_home"]), int(jogo["sets_away"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if max(sh, sa) != 3:
+            continue
+        inicio = _dt_de(jogo.get("inicio") or jogo.get("quando"))
+        if not _perto_do_inicio(inicio, ref):
+            continue
+        delta = abs((inicio - ref).total_seconds()) if inicio and ref else 0
+        if melhor_delta is None or delta < melhor_delta:
+            melhor, melhor_delta = (home, away, sh, sa), delta
+    if melhor is None:
+        return False
+    home, away, sh, sa = melhor
+    return _aplicar_placar(entrada, sh, sa, home, away, agora)
+
+
+def _liquidar_pelo_historico(entrada: dict, historico, agora: datetime) -> bool:
+    jogos = getattr(historico, "jogos", None) if historico is not None else None
+    if not jogos:
+        return False
+    ref = _inicio_entrada(entrada)
+    if ref is None:
+        return False
+    ref_ts = ref.timestamp()
+    melhor = None
+    melhor_delta = None
+    for jogo in jogos:
+        try:
+            ts = int(jogo["ts"])
+            sh, sa = int(jogo["sh"]), int(jogo["sa"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if max(sh, sa) != 3 or abs(ts - ref_ts) > 45 * 60:
+            continue
+        home, away = str(jogo.get("home") or ""), str(jogo.get("away") or "")
+        if not (_nome_resultado(entrada.get("home") or "", home) and _nome_resultado(entrada.get("away") or "", away)
+                or _nome_resultado(entrada.get("home") or "", away) and _nome_resultado(entrada.get("away") or "", home)):
+            continue
+        delta = abs(ts - ref_ts)
+        if melhor_delta is None or delta < melhor_delta:
+            melhor, melhor_delta = (home, away, sh, sa), delta
+    if melhor is None:
+        return False
+    home, away, sh, sa = melhor
+    return _aplicar_placar(entrada, sh, sa, home, away, agora)
+
+
+def liquidar_livro(livro: LivroEntradas, forma: Optional[FormaDia] = None,
+                   historico=None, agora: Optional[datetime] = None) -> int:
+    """Fecha pendentes com resultados já guardados. Não consulta a rede."""
+    agora = agora or agora_cet()
+    n = 0
+    for entrada in livro.pendentes():
+        if _liquidar_pela_forma(entrada, forma, agora) or _liquidar_pelo_historico(entrada, historico, agora):
+            n += 1
+            log.info("[RESUMO] %s %s %s -> %s (%s)", entrada.get("dia"), entrada.get("hora"),
+                     entrada.get("alvo"), entrada.get("status"), entrada.get("placar"))
+    if n:
+        livro.save()
+    return n
+
+
+def _saldo_un(itens: List[dict]) -> float:
+    total = 0.0
+    for entrada in itens:
+        if entrada.get("status") == "green" and entrada.get("odd") is not None:
+            total += float(entrada["odd"]) - 1.0
+        elif entrada.get("status") == "red":
+            total -= 1.0
+    return round(total, 2)
+
+
+def _fmt_un(valor: float) -> str:
+    return f"{valor:+.2f}"
+
+
+def _linha_anteriores(itens: List[dict]) -> str:
+    if not itens:
+        return ""
+    g = sum(1 for e in itens if e.get("status") == "green")
+    r = sum(1 for e in itens if e.get("status") == "red")
+    return f"Pendentes anteriores: {g} green, {r} red ({_fmt_un(_saldo_un(itens))} un)"
+
+
+def texto_resumo_entradas(dia, do_dia: List[dict], anteriores: List[dict]) -> str:
+    """Resumo curto do dia. Sem entradas, a frase fixa; pendências antigas já fechadas entram numa linha."""
+    rotulo = dia.strftime("%d/%m")
+    extra = _linha_anteriores(anteriores)
+    if not do_dia:
+        base = f"Resumo {rotulo} — nenhuma entrada"
+        return base if not extra else base + "\n" + extra
+    g = sum(1 for e in do_dia if e.get("status") == "green")
+    r = sum(1 for e in do_dia if e.get("status") == "red")
+    p = sum(1 for e in do_dia if e.get("status") == "pendente")
+    linhas = [
+        f"Resumo {rotulo}",
+        f"Entradas: {len(do_dia)} | Green: {g} | Red: {r} | Pendentes: {p}",
+        f"Saldo: {_fmt_un(_saldo_un(do_dia))} un (stake 1 un)",
+    ]
+    if extra:
+        linhas.append(extra)
+    return "\n".join(linhas)
+
+
+def _marcar_resumo(livro: LivroEntradas, ontem: str, do_dia: List[dict], anteriores: List[dict]):
+    for entrada in do_dia:
+        entrada["incluido"] = True
+        if entrada.get("status") in ("green", "red"):
+            entrada["resultado_avisado"] = True
+    for entrada in anteriores:
+        entrada["resultado_avisado"] = True
+    livro.ultimo_resumo = ontem
+    livro.save()
+
+
+def enviar_resumo_diario(tg: "Telegram", livro: LivroEntradas,
+                         forma: Optional[FormaDia] = None, historico=None,
+                         agora: Optional[datetime] = None) -> bool:
+    """Uma vez por dia, entre 00:05 e 00:20 Europe/Prague, resume o dia anterior.
+
+    Não consulta o MoviOdds. O dia enviado fica em entradas_v5.json.
+    """
+    agora = agora or agora_cet()
+    local = agora.astimezone(TZ_PRAGA) if agora.tzinfo else TZ_PRAGA.localize(agora)
+    if local.hour != 0 or not (RESUMO_HORA[1] <= local.minute <= RESUMO_HORA[1] + RESUMO_JANELA_MIN):
+        return False
+    ontem_data = local.date() - timedelta(days=1)
+    ontem = ontem_data.isoformat()
+    if livro.ultimo_resumo == ontem:
+        return False
+    liquidar_livro(livro, forma, historico, agora)
+    do_dia = livro.do_dia(ontem)
+    anteriores = [
+        e for e in livro.itens
+        if (e.get("dia") or "") < ontem and e.get("status") in ("green", "red")
+        and not e.get("resultado_avisado")
+    ]
+    texto = texto_resumo_entradas(ontem_data, do_dia, anteriores)
+    if not tg.send(texto):
+        log.error("[RESUMO %s] falha ao enviar — tenta de novo na janela", ontem)
+        return False
+    _marcar_resumo(livro, ontem, do_dia, anteriores)
+    g = sum(1 for e in do_dia if e.get("status") == "green")
+    r = sum(1 for e in do_dia if e.get("status") == "red")
+    p = sum(1 for e in do_dia if e.get("status") == "pendente")
+    log.info("[RESUMO %s] entradas=%s green=%s red=%s pendentes=%s saldo=%s",
+             ontem, len(do_dia), g, r, p, _fmt_un(_saldo_un(do_dia)))
+    return True
+
+
 # (chave, hora, minuto) — fora dos horários de entrada (hh:55) e depois do resumo (22:30)
 AGENDA_SAUDACOES = [("bomdia", 7, 50), ("boatarde", 12, 40), ("boanoite", 22, 35)]
 JANELA_SAUDACAO_MIN = 4    # termina antes do hh:55, agora que toda hora tem entrada
@@ -2540,11 +2834,15 @@ def texto_saudacao_agendada(chave: str, apostas: Apostas) -> str:
             f"💬 “{frase}”\n\n"
             "A entrada seguinte sai ≈5 min antes do próximo bloco. Descansem! 😴")
 
-def tarefas_agendadas(tg: "Telegram", apostas: Apostas, eventos: CacheSet, agora: Optional[datetime] = None) -> List[str]:
-    """Resumo diário (22:30) e saudações. Cada uma no máximo 1x por dia (persistido)."""
+def tarefas_agendadas(tg: "Telegram", apostas: Apostas, eventos: CacheSet, agora: Optional[datetime] = None,
+                      livro: Optional[LivroEntradas] = None, forma: Optional[FormaDia] = None,
+                      historico=None) -> List[str]:
+    """Resumo das 22:30, resumo das entradas às 00:05 e saudações. Cada um no máximo 1x por dia."""
     agora = agora or agora_cet()
     dia = agora.strftime("%Y-%m-%d")
     feitos = []
+    if livro is not None and enviar_resumo_diario(tg, livro, forma, historico, agora):
+        feitos.append("resumo_diario")
     ini_res = agora.replace(hour=HORA_RESUMO[0], minute=HORA_RESUMO[1], second=0, microsecond=0)
     k = f"resumo|{dia}"
     if ini_res <= agora <= agora.replace(hour=23, minute=59, second=59) and not eventos.has(k):
@@ -2724,6 +3022,7 @@ def main():
     entradas = CacheSet(ENTRADAS_FILE, limite=200)
     eventos = CacheSet(EVENTOS_FILE, limite=300)
     apostas = Apostas(APOSTAS_FILE)
+    livro = LivroEntradas(ENTRADAS_SALDO_FILE)
     me = tg.get_me()
     conversa = Conversa(me.get("username", ""), me.get("id", ""))
 
@@ -2802,7 +3101,7 @@ def main():
                     continue
                 tentativas_entrada[slot] = time.time()
                 processar_entrada(slot, hist, sinais, entradas, tg, fonte, apostas, forma,
-                                  historico_anterior, agenda_vista)
+                                  historico_anterior, agenda_vista, livro)
 
             agora_ts = time.time()
             vivos_terminados: List[Resultado] = []
@@ -2815,7 +3114,7 @@ def main():
                 log.info(f"[{modo}] partidas={len(matches)} | odds={len(odds_list)}")
                 if matches:
                     processar(matches, hist, finished, sinais, tg, modo, odds_list, apostas, forma,
-                              historico_anterior, agenda_vista)
+                              historico_anterior, agenda_vista, livro)
                 vivos_terminados = [Resultado(m.player1, m.player2, m.score1, m.score2, None, "live")
                                     for m in matches if m.finished]
 
@@ -2828,7 +3127,9 @@ def main():
                 resolver_apostas(apostas, _trazer_resultados(scoremondo, forma))
             notificar_resultados(apostas, tg)
 
-            tarefas_agendadas(tg, apostas, eventos)
+            liquidar_livro(livro, forma, historico_anterior, agora_cet())
+            tarefas_agendadas(tg, apostas, eventos, livro=livro, forma=forma,
+                              historico=historico_anterior)
 
             time.sleep(4)
         except KeyboardInterrupt:
