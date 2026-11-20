@@ -2214,21 +2214,37 @@ def vereditos_gemini(itens: list, hist: Historico, forma: Optional[FormaDia],
 
 def _texto_entrada(hora: str, home: str, away: str, alvo: str, odd: Optional[float],
                    veredito: str = "") -> str:
-    """Uma linha: HH:MM — Jogador A vs Jogador B | Entrada: Alvo @ Odd.
-
-    Com veredito do Gemini, uma segunda linha. Sem veredito, a linha não muda.
-    """
     odd_txt = f"{odd:.2f}" if isinstance(odd, (int, float)) else "—"
-    linha = (
-        f"{hora} — {_html(nome_exibicao(home))} vs {_html(nome_exibicao(away))}"
-        f" | Entrada: {_html(nome_exibicao(alvo))} @ {odd_txt}"
+    titulos = [
+        "🔥⚡ 𝗢𝗣𝗔! 𝗦𝗜𝗡𝗔𝗟 𝗙𝗥𝗘𝗦𝗤𝗨𝗜𝗡𝗛𝗢 ⚡🔥",
+        "🚀🏓 𝗣𝗔𝗦𝗦𝗢𝗨 𝗡𝗢 𝗙𝗜𝗟𝗧𝗥𝗢! 𝗕𝗢𝗥𝗔 🏓🚀",
+        "🎯✨ 𝗔𝗟𝗘𝗥𝗧𝗔 𝗗𝗘 𝗩𝗔𝗟𝗢𝗥 𝗡𝗔 𝗔́𝗥𝗘𝗔 ✨🎯",
+    ]
+    fechamentos = [
+        "Respeita a banca e bora buscar esse GREEN! 🍀💸",
+        "Tudo na régua, zero emoção e foco no lucro! 🧠🔥",
+        "Filtro cravado! Só confia no processo! 🙌⚡",
+    ]
+    bloco_gemini = f"🤖 𝗚𝗲𝗺𝗶𝗻𝗶: <i>{_html(veredito)}</i>\n" if veredito else ""
+    return (
+        f"{random.choice(titulos)}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"⏰ 𝗛𝗼𝗿𝗮́𝗿𝗶𝗼: <code>{hora}</code>\n"
+        f"🏓 𝗝𝗼𝗴𝗼: {_html(nome_exibicao(home))} vs {_html(nome_exibicao(away))}\n"
+        f"👑 𝗔𝗹𝘃𝗼: <b>{_html(nome_exibicao(alvo))}</b>\n"
+        f"💰 𝗢𝗱𝗱: <code>{odd_txt}</code>\n"
+        f"{bloco_gemini}"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"💬 <i>{random.choice(fechamentos)}</i>"
     )
-    if veredito:
-        linha += f"\n🤖 Gemini: {_html(veredito)}"
-    return linha
 
 def _texto_sem_entrada(hora: str) -> str:
-    return f"{hora} — Sem entrada"
+    frases = [
+        f"😴 <code>{hora}</code> — 𝗦𝗲𝗺 𝗲𝗻𝘁𝗿𝗮𝗱𝗮! Só armadilha nessa rodada, bora proteger a banca 🛡️",
+        f"☕ <code>{hora}</code> — 𝗡𝗮𝗱𝗮 𝗱𝗲 𝘃𝗮𝗹𝗼𝗿 agora. Hora do café enquanto esperamos a próxima! ✨",
+        f"🛑 <code>{hora}</code> — 𝗣𝗮𝘀𝘀𝗼 𝗹𝗼𝗻𝗴𝗲! O filtro travou tudo, seguimos disciplinados ✌️",
+    ]
+    return random.choice(frases)
 
 def _linhas_historico(hist, home: str, away: str, universo: List[str]) -> List[str]:
     """Forma 7d e H2H 14d lidos do cache. Sem chave, sem casamento único ou sem jogos: nada."""
@@ -2576,16 +2592,16 @@ def notificar_resultados(apostas: Apostas, tg: "Telegram") -> int:
         hoje = estatisticas([x for x in apostas.periodo(a["dia"], a["dia"])
                              if x is a or (x["status"] != "pendente" and x.get("notificado"))])
         conf = f"{esc(a['home'])} vs {esc(a['away'])}"
-        if a["status"] == "green":
-            cab = "✅ <b>GREEN!</b>"
-            corpo = f"{esc(a['placar'])}\n👉 Entrada: <b>{esc(a['pick'])}</b>"
+      if a["status"] == "green":
+            cab = "🟢🎉 𝗚𝗥𝗘𝗘𝗡 𝗡𝗔 𝗖𝗢𝗡𝗧𝗔! 🎉🟢"
+            corpo = f"🏓 {esc(a['placar'])}\n👑 𝗔𝗹𝘃𝗼: <b>{esc(a['pick'])}</b> bateu lindo! 💸🔥"
         elif a["status"] == "red":
-            cab = "❌ <b>RED</b>"
-            corpo = f"{esc(a['placar'])}\n👉 Entrada: <b>{esc(a['pick'])}</b>"
+            cab = "❌😤 𝗥𝗘𝗗 𝗡𝗔 𝗥𝗢𝗗𝗔𝗗𝗔"
+            corpo = f"🏓 {esc(a['placar'])}\n👑 𝗔𝗹𝘃𝗼: <b>{esc(a['pick'])}</b> — segue o baile, cabeça fria!"
         else:
-            cab = "⚪ <b>Entrada anulada</b>"
+            cab = "⚪ 𝗘𝗻𝘁𝗿𝗮𝗱𝗮 𝗮𝗻𝘂𝗹𝗮𝗱𝗮"
             corpo = f"{conf}\nResultado não encontrado — não conta no placar."
-        texto = f"{cab}\n\n{corpo}\n\n📊 Hoje: {fmt_placar(hoje)}"
+        texto = f"{cab}\n\n{corpo}\n\n📊 𝗛𝗼𝗷𝗲: <b>{fmt_placar(hoje)}</b>"
         if a["status"] == "red":
             texto += "\n\n💬 " + frase_motivacional()
         if tg.send(texto):
@@ -2612,44 +2628,59 @@ def inicio_semana(d: datetime) -> str:
 def texto_placar(apostas: Apostas, titulo: str, d1: str, d2: str, por_bloco: bool = False) -> str:
     lista = apostas.periodo(d1, d2)
     st = estatisticas(lista)
-    linhas = [f"📊 <b>{titulo}</b>", "", f"Resultado: <b>{fmt_placar(st)}</b>"]
-    if st["v"]:
-        linhas.append(f"Anuladas: {st['v']}")
-    if st["p"]:
-        linhas.append(f"Pendentes: {st['p']}")
     if not lista:
-        linhas = [f"📊 <b>{titulo}</b>", "", "Nenhuma entrada no período."]
-    if por_bloco and lista:
+        return (
+            f"📊✨ <b>{titulo}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"😴 Nenhuma entrada no período ainda. Seguimos na disciplina!"
+        )
+    linhas = [
+        f"📊🔥 <b>{titulo}</b>",
+        "━━━━━━━━━━━━━━━━━━",
+        f"🏆 𝗥𝗲𝘀𝘂𝗹𝘁𝗮𝗱𝗼: <b>{fmt_placar(st)}</b>",
+    ]
+    if st["v"]:
+        linhas.append(f"⚪ 𝗔𝗻𝘂𝗹𝗮𝗱𝗮𝘀: <code>{st['v']}</code>")
+    if st["p"]:
+        linhas.append(f"⏳ 𝗣𝗲𝗻𝗱𝗲𝗻𝘁𝗲𝘀: <code>{st['p']}</code>")
+    if por_bloco:
         linhas.append("")
-        linhas.append("<b>Por rodada:</b>")
+        linhas.append("⏰ 𝗣𝗼𝗿 𝗿𝗼𝗱𝗮𝗱𝗮:")
         for b in BLOCOS:
             sb = estatisticas([a for a in lista if a["bloco"] == b])
             if sb["g"] or sb["r"] or sb["p"] or sb["v"]:
-                linhas.append(f"• {b}h: {fmt_placar(sb)}" + (f" · {sb['p']} pend." if sb["p"] else ""))
+                linhas.append(f"• <code>{b}h</code>: {fmt_placar(sb)}" + (f" · {sb['p']} pend." if sb["p"] else ""))
     return "\n".join(linhas)
 
 def texto_resumo_dia(apostas: Apostas, agora: Optional[datetime] = None) -> str:
     agora = agora or agora_cet()
     dia = agora.strftime("%Y-%m-%d")
     mes_ini = agora.strftime("%Y-%m-01")
-    corpo = texto_placar(apostas, f"Resumo do dia {agora.strftime('%d/%m')}", dia, dia, por_bloco=True)
+    corpo = texto_placar(apostas, f"𝗥𝗘𝗦𝗨𝗠𝗢 𝗗𝗢 𝗗𝗜𝗔 {agora.strftime('%d/%m')}", dia, dia, por_bloco=True)
     mes = estatisticas(apostas.periodo(mes_ini, dia))
-    return (corpo + f"\n\n📅 <b>No mês:</b> {fmt_placar(mes)}"
-            + f"\n\n💬 {frase_motivacional()}\n\n{AVISO_RESPONSAVEL}")
+    return (
+        f"{corpo}\n\n"
+        f"📅 𝗡𝗼 𝗺𝗲̂𝘀: <b>{fmt_placar(mes)}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"💬 <i>“{frase_motivacional()}”</i>\n\n"
+        f"{AVISO_RESPONSAVEL}"
+    )
 
 def texto_entradas_hoje(apostas: Apostas) -> str:
     dia = agora_cet().strftime("%Y-%m-%d")
     lista = apostas.periodo(dia, dia)
     if not lista:
-        return f"📋 Nenhuma entrada hoje ainda.\nPróxima: {proxima_entrada()} CET"
+        return f"📋😴 𝗡𝗲𝗻𝗵𝘂𝗺𝗮 𝗲𝗻𝘁𝗿𝗮𝗱𝗮 𝗵𝗼𝗷𝗲 𝗮𝗶𝗻𝗱𝗮.\n🎯 Próxima análise: <code>{proxima_entrada()}</code> CET"
     em = {"pendente": "⏳", "green": "✅", "red": "❌", "anulada": "⚪"}
-    linhas = ["📋 <b>Entradas de hoje</b>", ""]
+    linhas = ["📋⚡ 𝗘𝗡𝗧𝗥𝗔𝗗𝗔𝗦 𝗗𝗘 𝗛𝗢𝗝𝗘", "━━━━━━━━━━━━━━━━━━"]
     for a in lista:
         hk = datetime.fromisoformat(a["kickoff"]).strftime("%H:%M") if a["kickoff"] else f"{a['bloco']}h ao vivo"
-        extra = f" — {esc(a['placar'])}" if a.get("placar") else ""
-        linhas.append(f"{em.get(a['status'], '•')} {hk} · <b>{esc(a['pick'])}</b> "
-                      f"({esc(a['home'])} vs {esc(a['away'])}){extra}")
-    linhas += ["", f"📊 {fmt_placar(estatisticas(lista))}"]
+        extra = f" — <code>{esc(a['placar'])}</code>" if a.get("placar") else ""
+        linhas.append(
+            f"{em.get(a['status'], '•')} <code>{hk}</code> · 👑 <b>{esc(a['pick'])}</b> "
+            f"({esc(a['home'])} vs {esc(a['away'])}){extra}"
+        )
+    linhas += ["━━━━━━━━━━━━━━━━━━", f"📊 𝗣𝗹𝗮𝗰𝗮𝗿: <b>{fmt_placar(estatisticas(lista))}</b>"]
     return "\n".join(linhas)
 
 HORARIOS_TXT = (
@@ -3108,22 +3139,24 @@ def _linha_anteriores(itens: List[dict]) -> str:
 
 
 def texto_resumo_entradas(dia, do_dia: List[dict], anteriores: List[dict]) -> str:
-    """Resumo curto do dia. Sem entradas, a frase fixa; pendências antigas já fechadas entram numa linha."""
     rotulo = dia.strftime("%d/%m")
     extra = _linha_anteriores(anteriores)
     if not do_dia:
-        base = f"Resumo {rotulo} — nenhuma entrada"
+        base = f"🌙 𝗥𝗘𝗦𝗨𝗠𝗢 {rotulo} — Nenhuma entrada registrada 😴"
         return base if not extra else base + "\n" + extra
     g = sum(1 for e in do_dia if e.get("status") == "green")
     r = sum(1 for e in do_dia if e.get("status") == "red")
     p = sum(1 for e in do_dia if e.get("status") == "pendente")
+    saldo = _saldo_un(do_dia)
+    emoji_saldo = "🚀💸" if saldo > 0 else ("⚖️" if saldo == 0 else "🛡️")
     linhas = [
-        f"Resumo {rotulo}",
-        f"Entradas: {len(do_dia)} | Green: {g} | Red: {r} | Pendentes: {p}",
-        f"Saldo: {_fmt_un(_saldo_un(do_dia))} un (stake 1 un)",
+        f"🌙📊 𝗙𝗘𝗖𝗛𝗔𝗠𝗘𝗡𝗧𝗢 {rotulo}",
+        "━━━━━━━━━━━━━━━━━━",
+        f"🎯 𝗘𝗻𝘁𝗿𝗮𝗱𝗮𝘀: <code>{len(do_dia)}</code> | ✅ <code>{g}</code> | ❌ <code>{r}</code> | ⏳ <code>{p}</code>",
+        f"{emoji_saldo} 𝗦𝗮𝗹𝗱𝗼: <b>{_fmt_un(saldo)} un</b> <i>(stake 1 un)</i>",
     ]
     if extra:
-        linhas.append(extra)
+        linhas.append(f"📌 {extra}")
     return "\n".join(linhas)
 
 
@@ -3187,19 +3220,19 @@ def texto_saudacao_agendada(chave: str, apostas: Apostas) -> str:
     frase = frase_motivacional()
     dia = agora_cet().strftime("%Y-%m-%d")
     if chave == "bomdia":
-        return ("☀️ <b>Bom dia, galera!</b>\n\n"
-                f"💬 “{frase}”\n\n"
-                "🎯 Entrada ≈5 min antes de cada bloco (CET), só Czech Liga Pro.\n"
-                "Bora com disciplina! 💪")
+        return ("☀️🔥 𝗕𝗢𝗠 𝗗𝗜𝗔, 𝗚𝗔𝗟𝗘𝗥𝗔! 🔥☀️\n\n"
+                f"💬 <i>“{frase}”</i>\n\n"
+                "🏓 Filtro ligado 24h na <b>Czech Liga Pro</b>.\n"
+                "🎯 Alertas ≈5 min antes de cada bloco. Bora pra cima! 💪✨")
     if chave == "boatarde":
         st = estatisticas(apostas.periodo(dia, dia))
-        parcial = f"📊 Parcial de hoje: {fmt_placar(st)}\n" if (st["g"] or st["r"]) else ""
-        return ("🌤️ <b>Boa tarde, time!</b>\n\n"
-                f"💬 “{frase}”\n\n" + parcial +
-                "🎯 Próxima entrada ≈5 min antes do próximo bloco (CET)")
-    return ("🌙 <b>Boa noite, pessoal!</b>\n\n"
-            f"💬 “{frase}”\n\n"
-            "A entrada seguinte sai ≈5 min antes do próximo bloco. Descansem! 😴")
+        parcial = f"📊 𝗣𝗮𝗿𝗰𝗶𝗮𝗹 𝗱𝗲 𝗵𝗼𝗷𝗲: <b>{fmt_placar(st)}</b>\n" if (st["g"] or st["r"]) else ""
+        return ("🌤️⚡ 𝗕𝗢𝗔 𝗧𝗔𝗥𝗗𝗘, 𝗧𝗜𝗠𝗘! ⚡🌤️\n\n"
+                f"💬 <i>“{frase}”</i>\n\n" + parcial +
+                "🎯 Seguimos de olho no próximo bloco da Liga Pro! 👀🏓")
+    return ("🌙✨ 𝗕𝗢𝗔 𝗡𝗢𝗜𝗧𝗘, 𝗣𝗘𝗦𝗦𝗢𝗔𝗟! ✨🌙\n\n"
+            f"💬 <i>“{frase}”</i>\n\n"
+            "O bot continua vigiando a madrugada. Descansem bem! 😴🙌")
 
 def tarefas_agendadas(tg: "Telegram", apostas: Apostas, eventos: CacheSet, agora: Optional[datetime] = None,
                       livro: Optional[LivroEntradas] = None, forma: Optional[FormaDia] = None,
