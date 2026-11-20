@@ -17,6 +17,13 @@ Horários CET (Europe/Madrid, somente Czech Liga Pro):
   2ª Rodada (fallback ao vivo): 09:00 / 09:30 → 13:00 / 13:30 → 17:00 / 17:30 → 21:00 / 21:30
       Só sinaliza confrontos que não foram avaliados às hh:55 (sem duplicar).
 
+MoviOdds (odds, opcional) — 52 consultas/dia (~1.600/mês), não a cada scrape.
+  Por ciclo (hh em 08, 12, 16, 20), a partir de 12 min antes dos jogos das hh+1:00:
+  hh:48, hh:54, hh:55 (entrada) e (hh+1):00, :06, :12, :18, :20, :24, :30, :36, :42, :48.
+  Entre hh:00 e hh:47 a 1ª rodada reutiliza o cache (pode estar vazio). Se uma
+  consulta volta vazia por erro, o mesmo slot é tentado de novo depois de ~60 s
+  (no máximo 2 vezes).
+
 Interativo (v5) — tudo vai para o GRUPO (TELEGRAM_GROUP_ID):
   • GREEN ✅ / RED ❌ de cada entrada assim que o jogo termina + placar do dia
     (entrada sem resultado após 3 h = anulada, não conta)
@@ -100,6 +107,18 @@ JANELAS_R1 = [
 HORAS_ENTRADA = (8, 12, 16, 20)
 JANELAS_ENTRADA = [(h, 55, h, 59) for h in HORAS_ENTRADA]
 
+# Consultas ao MoviOdds: (deslocamento de hora a partir de cada hora de HORAS_ENTRADA, minuto).
+# A grade começa 12 min antes dos jogos (hh:48) e segue de 6 em 6 min, com dois extras:
+# hh:55 (a entrada precisa de odds frescas) e (hh+1):20 (a grade cai em :18 e :24).
+# 13 slots × 4 ciclos = 52 consultas/dia. Entre hh:00 e hh:47 não há consulta.
+MOVIODDS_MINUTOS = tuple(sorted(
+    [(0, 48), (0, 54), (0, 55)]
+    + [(1, m) for m in range(0, 49, 6)]
+    + [(1, 20)]
+))
+MOVIODDS_MAX_TENTATIVAS = 2
+MOVIODDS_RETRY_S = 60
+
 # 2ª Rodada (fallback ao vivo): 09:00, 09:30 | 13:00, 13:30 | 17:00, 17:30 | 21:00, 21:30
 JANELAS_R2 = [
     (9, 0, 9, 50),
@@ -133,6 +152,95 @@ def slot_entrada_atual() -> Optional[str]:
     if now.hour in HORAS_ENTRADA and 55 <= now.minute <= 59:
         return f"{now.strftime('%Y-%m-%d')}|{now.hour:02d}:55"
     return None
+
+def slot_moviodds_atual(now: Optional[datetime] = None) -> Optional[str]:
+    """Chave 'YYYY-MM-DD|HH:MM' se este minuto é um slot de MOVIODDS_MINUTOS; senão None.
+
+    O deslocamento de hora pode cruzar a meia-noite: um slot observado de madrugada
+    ainda pertence ao ciclo ancorado no dia anterior.
+    """
+    now = now or agora_cet()
+    alvo_min = now.hour * 60 + now.minute
+    for dias_depois in (0, 1):
+        for h in HORAS_ENTRADA:
+            for off, minute in MOVIODDS_MINUTOS:
+                extra, minuto = divmod((h + off) * 60 + minute, 24 * 60)
+                if extra == dias_depois and minuto == alvo_min:
+                    return f"{now.strftime('%Y-%m-%d')}|{now.hour:02d}:{now.minute:02d}"
+    return None
+
+class CacheOdds:
+    """Última lista de odds e o instante (time.time) da consulta que a gravou."""
+    def __init__(self):
+        self.lista: List[OddsMatch] = []
+        self.quando: Optional[float] = None
+        self.tentativas: Dict[str, int] = {}
+        self.ultima_tentativa: Dict[str, float] = {}
+        self.falhou: Dict[str, bool] = {}
+
+def _fetch_anotando_erro(moviodds: "MoviOdds") -> Tuple[List[OddsMatch], bool]:
+    """fetch_czech sem mexer na classe. erro=True só se a lista veio vazia por falha."""
+    falhas: List[str] = []
+
+    class _Aviso(logging.Handler):
+        def emit(self, record: logging.LogRecord):
+            if record.levelno >= logging.WARNING and record.getMessage().startswith("MoviOdds erro"):
+                falhas.append(record.getMessage())
+
+    aviso = _Aviso()
+    log.addHandler(aviso)
+    try:
+        lista = moviodds.fetch_czech()
+    finally:
+        log.removeHandler(aviso)
+    return lista, (not lista) and bool(falhas)
+
+def _pode_tentar_slot(cache: CacheOdds, slot: str, ts: float) -> bool:
+    feitas = cache.tentativas.get(slot, 0)
+    if feitas >= MOVIODDS_MAX_TENTATIVAS:
+        return False
+    if feitas == 0:
+        return True
+    if not cache.falhou.get(slot):
+        return False
+    return ts - cache.ultima_tentativa.get(slot, 0) >= MOVIODDS_RETRY_S
+
+def _slot_para_consultar(cache: CacheOdds, now: datetime, ts: float) -> Optional[str]:
+    """Slot a consultar agora, ou None para reutilizar o cache.
+
+    No minuto agendado, no máximo uma consulta (segunda tentativa ~60 s depois
+    se a primeira voltou vazia por erro). Essa segunda tentativa ainda vale
+    para o mesmo slot quando o relógio já saiu daquele minuto.
+    """
+    atual = slot_moviodds_atual(now)
+    if atual is not None and _pode_tentar_slot(cache, atual, ts):
+        return atual
+    if not cache.ultima_tentativa:
+        return None
+    ultimo = max(cache.ultima_tentativa, key=cache.ultima_tentativa.get)
+    if atual not in (None, ultimo):
+        return None
+    if cache.tentativas.get(ultimo, 0) > 0 and _pode_tentar_slot(cache, ultimo, ts):
+        return ultimo
+    return None
+
+def obter_odds(moviodds: "MoviOdds", cache: CacheOdds,
+               now: Optional[datetime] = None, agora_ts: Optional[float] = None) -> List[OddsMatch]:
+    """Odds em cache. Consulta o MoviOdds só no slot agendado (no máximo 2 tentativas)."""
+    now = now or agora_cet()
+    ts = time.time() if agora_ts is None else agora_ts
+    slot = _slot_para_consultar(cache, now, ts)
+    if slot is None:
+        return cache.lista
+    lista, erro = _fetch_anotando_erro(moviodds)
+    cache.tentativas[slot] = cache.tentativas.get(slot, 0) + 1
+    cache.ultima_tentativa[slot] = ts
+    cache.falhou[slot] = erro
+    if not erro:
+        cache.lista = lista
+        cache.quando = ts
+    log.info("[ODDS] consulta %s -> %s jogos", slot.split("|", 1)[1], len(lista))
+    return cache.lista
 
 def janela_rodada2(slot_key: str) -> Tuple[datetime, datetime]:
     """Para o slot 'YYYY-MM-DD|hh:55' retorna (início, fim) da 2ª rodada: hh+1:00 .. hh+1:50 CET."""
@@ -1449,6 +1557,7 @@ def main():
     ultimo_modo = ""
     ultima_tentativa_entrada = 0.0
     ultimo_aviso_conflito = 0.0
+    odds_cache = CacheOdds()
 
     while True:
         try:
@@ -1477,10 +1586,12 @@ def main():
                     hist.limpar_antigo()
                 ultimo_modo = modo
 
+            # MoviOdds só nos minutos de MOVIODDS_MINUTOS; R1/R2 e a entrada reusam o cache.
+            odds_now = obter_odds(moviodds, odds_cache)
+
             slot = slot_entrada_atual()
             if slot and not entradas.has(slot) and time.time() - ultima_tentativa_entrada >= 30:
                 ultima_tentativa_entrada = time.time()
-                odds_now = moviodds.fetch_czech()
                 registrar_resultados_r1(scoremondo.fetch_results(), hist, finished, odds_now)
                 fixtures = scoremondo.fetch_fixtures()
                 fonte = com_odds(fixtures, odds_now) if fixtures else odds_now
@@ -1496,7 +1607,7 @@ def main():
             if modo in ("R1", "R2") and agora_ts - ultimo_scrape >= INTERVALO_SCRAPE:
                 ultimo_scrape = agora_ts
                 matches = scoremondo.fetch()
-                odds_list = moviodds.fetch_czech()
+                odds_list = odds_now
                 if modo == "R1":
                     registrar_resultados_r1(scoremondo.fetch_results(), hist, finished, odds_list)
                 log.info(f"[{modo}] partidas={len(matches)} | odds={len(odds_list)}")
