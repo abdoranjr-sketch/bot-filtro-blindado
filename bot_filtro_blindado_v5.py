@@ -23,7 +23,7 @@ Filtro rígido por FORMA NA JANELA (últimas 4 h; o alvo é quem tem o melhor
   (3-0/3-1), não vem de 5 sets há menos de 45 min, não jogou nos 45 min
   anteriores ao apito, o adversário tem score <= 0, o gap (com bônus de
   adversário comum) é >= 5 e os dois não estão com score >= 3. Sem odds, ou
-  cache de odds com mais de 20 min, não há entrada. H2H 14d é só informação.
+  cache de odds com mais de 20 min, não há . H2H 14d é só informação.
 
 MoviOdds (odds + resultados) — 144 consultas/dia na grade (4.464 em 31 dias, abaixo de 5.000).
   Uma consulta de odds traz todos os jogos futuros, então a grade pede odds a cada
@@ -36,13 +36,13 @@ MoviOdds (odds + resultados) — 144 consultas/dia na grade (4.464 em 31 dias, a
   consulta imediata (no máximo uma por dia, além da grade: o teste aceita ≤161).
 
 Interativo (v5) — tudo vai para o GRUPO (TELEGRAM_GROUP_ID):
-  • GREEN ✅ / RED ❌ de cada entrada assim que o jogo termina + placar do dia
-    (entrada sem resultado após 3 h = anulada, não conta)
+  • GREEN ✅ / RED ❌ de cada  assim que o jogo termina + placar do dia
+    ( sem resultado após 3 h = anulada, não conta)
   • Resumo do dia às 22:30 (por rodada + acumulado do mês) com aviso +18
-  • Resumo das entradas às 00:05 Europe/Prague (dia anterior, stake 1 un)
+  • Resumo das s às 00:05 Europe/Prague (dia anterior, stake 1 un)
   • Saudações 07:50 (bom dia), 12:40 (boa tarde), 22:35 (boa noite) com frase motivacional
   • Responde bom dia/boa tarde/boa noite/oi/obrigado e menções ao bot (com limite por pessoa)
-  • Comandos de todos: /placar /semana /mes /entradas /ajuda /id
+  • Comandos de todos: /placar /semana /mes /s /ajuda /id
     Comandos de admin (só o dono, TELEGRAM_OWNER_ID ou TELEGRAM_CHAT_ID):
     /status /lista /zerar /limpo /desgaste /derrota
   Para ler mensagens normais do grupo: desative o "Group Privacy" no BotFather
@@ -53,9 +53,9 @@ Configuração (variáveis de ambiente):
   Recomendada:  TELEGRAM_GROUP_ID (grupo; sem ela tudo vai para TELEGRAM_CHAT_ID)
   Opcional:     TELEGRAM_OWNER_ID (id do usuário admin; padrão = TELEGRAM_CHAT_ID)
                 TELEGRAM_DISCUSSION_ID (grupo de discussão ligado ao canal: lá o bot
-                conversa, dá boas-vindas e responde /placar /semana /mes /entradas /ajuda;
-                as entradas, green/red, resumo e saudações continuam no TELEGRAM_GROUP_ID)
-  Opcionais:    MOVIODDS_KEY (odds; sem chave não há entrada — falta odds de mercado)
+                conversa, dá boas-vindas e responde /placar /semana /mes /s /ajuda;
+                as s, green/red, resumo e saudações continuam no TELEGRAM_GROUP_ID)
+  Opcionais:    MOVIODDS_KEY (odds; sem chave não há  — falta odds de mercado)
                 MOVIODDS_KEY_2 (reserva do MoviOdds, opcional: entra por 30 min se a
                 principal falhar com 401, 403, 429, 5xx ou erro de rede)
                 SPORTSAPI365_KEY (resultados anteriores, RapidAPI; sem ela o bot segue
@@ -66,7 +66,7 @@ Resultados anteriores (SportsAPI365, opcional): uma vez por dia, depois das 00:3
 Europe/Prague, baixa os finalizados de ontem (no primeiro arranque, até 7 dias) e
 guarda 14 dias em DATA_DIR. No máximo 40 chamadas por dia, abaixo do teto de 50.
 A forma de 7 dias e o H2H de 14 são lidos só do cache e vão para o log, não para
-o Telegram. O H2H não bloqueia entrada. As 144 consultas do MoviOdds não mudam.
+o Telegram. O H2H não bloqueia . As 144 consultas do MoviOdds não mudam.
 """
 
 from __future__ import annotations
@@ -109,9 +109,9 @@ DATA_DIR = Path(os.getenv("DATA_DIR", "").strip() or Path(__file__).resolve().pa
 HISTORY_FILE = DATA_DIR / "historico_v4.json"
 ENVIADOS_FILE = DATA_DIR / "sinais_enviados_v4.json"
 FINISHED_FILE = DATA_DIR / "finished_cache_v4.json"
-ENTRADAS_FILE = DATA_DIR / "entradas_enviadas_v4.json"
-APOSTAS_FILE = DATA_DIR / "apostas_v5.json"      # entradas + green/red
-ENTRADAS_SALDO_FILE = DATA_DIR / "entradas_v5.json"  # entradas aprovadas e o resumo das 00:05
+S_FILE = DATA_DIR / "s_enviadas_v4.json"
+APOSTAS_FILE = DATA_DIR / "apostas_v5.json"      # s + green/red
+S_SALDO_FILE = DATA_DIR / "s_v5.json"  # s aprovadas e o resumo das 00:05
 AUDITORIA_FILE = DATA_DIR / "auditoria_v5.csv"       # data, horario, jogo, alvo, odd, gap, resultado
 AUDITORIA_APOS_MIN = 35
 EVENTOS_FILE = DATA_DIR / "eventos_v5.json"      # resumo/saudações já enviados
@@ -162,7 +162,7 @@ def estimar_inicio(fim: datetime, sets_a: int, sets_b: int) -> datetime:
 def peso_sets(sets_favor: int, sets_contra: int) -> float:
     return float(PESOS_FORMA.get((int(sets_favor), int(sets_contra)), 0.0))
 # O alerta é :25 (bloco :30) e :55 (bloco :00). A folga cobre um ciclo de ~40 s
-# que acorde depois do minuto exato. ENTRADA_ANTES_* só descreve essa folga.
+# que acorde depois do minuto exato. _ANTES_* só descreve essa folga.
 ALERTA_FOLGA_MIN = 4
 ENTRADA_ANTES_MAX_S = 5 * 60
 ENTRADA_ANTES_MIN_S = 60
@@ -2074,15 +2074,35 @@ def _adversario_do_alvo(alvo: str, home: str, away: str) -> str:
     return away if mesmo_jogador(alvo or "", home) else home
 
 def _texto_entrada(hora: str, home: str, away: str, alvo: str, odd: Optional[float]) -> str:
-    """Uma linha: HH:MM — Jogador A vs Jogador B | Entrada: Alvo @ Odd."""
     odd_txt = f"{odd:.2f}" if isinstance(odd, (int, float)) else "—"
+    titulos = [
+        "🔥⚡ 𝗢𝗣𝗔! 𝗦𝗜𝗡𝗔𝗟 𝗙𝗥𝗘𝗦𝗤𝗨𝗜𝗡𝗛𝗢 ⚡🔥",
+        "🚀🏓 𝗣𝗔𝗦𝗦𝗢𝗨 𝗡𝗢 𝗙𝗜𝗟𝗧𝗥𝗢! 𝗕𝗢𝗥𝗔 🏓🚀",
+        "🎯✨ 𝗔𝗟𝗘𝗥𝗧𝗔 𝗗𝗘 𝗩𝗔𝗟𝗢𝗥 𝗡𝗔 𝗔́𝗥𝗘𝗔 ✨🎯",
+    ]
+    fechamentos = [
+        "Respeita a banca e bora buscar esse GREEN! 🍀💸",
+        "Tudo na régua, zero emoção e foco no lucro! 🧠🔥",
+        "Filtro cravado! Só confia no processo! 🙌⚡",
+    ]
     return (
-        f"{hora} — {_html(nome_exibicao(home))} vs {_html(nome_exibicao(away))}"
-        f" | Entrada: {_html(nome_exibicao(alvo))} @ {odd_txt}"
+        f"{random.choice(titulos)}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"⏰ 𝗛𝗼𝗿𝗮́𝗿𝗶𝗼: <code>{hora}</code>\n"
+        f"🏓 𝗝𝗼𝗴𝗼: {_html(nome_exibicao(home))} vs {_html(nome_exibicao(away))}\n"
+        f"👑 𝗔𝗹𝘃𝗼: <b>{_html(nome_exibicao(alvo))}</b>\n"
+        f"💰 𝗢𝗱𝗱: <code>{odd_txt}</code>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"💬 <i>{random.choice(fechamentos)}</i>"
     )
 
 def _texto_sem_entrada(hora: str) -> str:
-    return f"{hora} — Sem entrada"
+    frases = [
+        f"😴 <code>{hora}</code> — 𝗦𝗲𝗺 𝗲𝗻𝘁𝗿𝗮𝗱𝗮! Só armadilha nessa rodada, bora proteger a banca 🛡️",
+        f"☕ <code>{hora}</code> — 𝗡𝗮𝗱𝗮 𝗱𝗲 𝘃𝗮𝗹𝗼𝗿 agora. Hora do café enquanto esperamos a próxima! ✨",
+        f"🛑 <code>{hora}</code> — 𝗣𝗮𝘀𝘀𝗼 𝗹𝗼𝗻𝗴𝗲! O filtro travou tudo, seguimos disciplinados ✌️",
+    ]
+    return random.choice(frases)
 
 def _linhas_historico(hist, home: str, away: str, universo: List[str]) -> List[str]:
     """Forma 7d e H2H 14d lidos do cache. Sem chave, sem casamento único ou sem jogos: nada."""
@@ -2426,16 +2446,16 @@ def notificar_resultados(apostas: Apostas, tg: "Telegram") -> int:
         hoje = estatisticas([x for x in apostas.periodo(a["dia"], a["dia"])
                              if x is a or (x["status"] != "pendente" and x.get("notificado"))])
         conf = f"{esc(a['home'])} vs {esc(a['away'])}"
-        if a["status"] == "green":
-            cab = "✅ <b>GREEN!</b>"
-            corpo = f"{esc(a['placar'])}\n👉 Entrada: <b>{esc(a['pick'])}</b>"
+    if a["status"] == "green":
+            cab = "🟢🎉 𝗚𝗥𝗘𝗘𝗡 𝗡𝗔 𝗖𝗢𝗡𝗧𝗔! 🎉🟢"
+            corpo = f"🏓 {esc(a['placar'])}\n👑 𝗔𝗹𝘃𝗼: <b>{esc(a['pick'])}</b> bateu lindo! 💸🔥"
         elif a["status"] == "red":
-            cab = "❌ <b>RED</b>"
-            corpo = f"{esc(a['placar'])}\n👉 Entrada: <b>{esc(a['pick'])}</b>"
+            cab = "❌😤 𝗥𝗘𝗗 𝗡𝗔 𝗥𝗢𝗗𝗔𝗗𝗔"
+            corpo = f"🏓 {esc(a['placar'])}\n👑 𝗔𝗹𝘃𝗼: <b>{esc(a['pick'])}</b> — segue o baile, cabeça fria!"
         else:
-            cab = "⚪ <b>Entrada anulada</b>"
+            cab = "⚪ 𝗘𝗻𝘁𝗿𝗮𝗱𝗮 𝗮𝗻𝘂𝗹𝗮𝗱𝗮"
             corpo = f"{conf}\nResultado não encontrado — não conta no placar."
-        texto = f"{cab}\n\n{corpo}\n\n📊 Hoje: {fmt_placar(hoje)}"
+        texto = f"{cab}\n\n{corpo}\n\n📊 𝗛𝗼𝗷𝗲: <b>{fmt_placar(hoje)}</b>"
         if a["status"] == "red":
             texto += "\n\n💬 " + frase_motivacional()
         if tg.send(texto):
@@ -2462,44 +2482,59 @@ def inicio_semana(d: datetime) -> str:
 def texto_placar(apostas: Apostas, titulo: str, d1: str, d2: str, por_bloco: bool = False) -> str:
     lista = apostas.periodo(d1, d2)
     st = estatisticas(lista)
-    linhas = [f"📊 <b>{titulo}</b>", "", f"Resultado: <b>{fmt_placar(st)}</b>"]
-    if st["v"]:
-        linhas.append(f"Anuladas: {st['v']}")
-    if st["p"]:
-        linhas.append(f"Pendentes: {st['p']}")
     if not lista:
-        linhas = [f"📊 <b>{titulo}</b>", "", "Nenhuma entrada no período."]
-    if por_bloco and lista:
+        return (
+            f"📊✨ <b>{titulo}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"😴 Nenhuma entrada no período ainda. Seguimos na disciplina!"
+        )
+    linhas = [
+        f"📊🔥 <b>{titulo}</b>",
+        "━━━━━━━━━━━━━━━━━━",
+        f"🏆 𝗥𝗲𝘀𝘂𝗹𝘁𝗮𝗱𝗼: <b>{fmt_placar(st)}</b>",
+    ]
+    if st["v"]:
+        linhas.append(f"⚪ 𝗔𝗻𝘂𝗹𝗮𝗱𝗮𝘀: <code>{st['v']}</code>")
+    if st["p"]:
+        linhas.append(f"⏳ 𝗣𝗲𝗻𝗱𝗲𝗻𝘁𝗲𝘀: <code>{st['p']}</code>")
+    if por_bloco:
         linhas.append("")
-        linhas.append("<b>Por rodada:</b>")
+        linhas.append("⏰ 𝗣𝗼𝗿 𝗿𝗼𝗱𝗮𝗱𝗮:")
         for b in BLOCOS:
             sb = estatisticas([a for a in lista if a["bloco"] == b])
             if sb["g"] or sb["r"] or sb["p"] or sb["v"]:
-                linhas.append(f"• {b}h: {fmt_placar(sb)}" + (f" · {sb['p']} pend." if sb["p"] else ""))
+                linhas.append(f"• <code>{b}h</code>: {fmt_placar(sb)}" + (f" · {sb['p']} pend." if sb["p"] else ""))
     return "\n".join(linhas)
 
 def texto_resumo_dia(apostas: Apostas, agora: Optional[datetime] = None) -> str:
     agora = agora or agora_cet()
     dia = agora.strftime("%Y-%m-%d")
     mes_ini = agora.strftime("%Y-%m-01")
-    corpo = texto_placar(apostas, f"Resumo do dia {agora.strftime('%d/%m')}", dia, dia, por_bloco=True)
+    corpo = texto_placar(apostas, f"𝗥𝗘𝗦𝗨𝗠𝗢 𝗗𝗢 𝗗𝗜𝗔 {agora.strftime('%d/%m')}", dia, dia, por_bloco=True)
     mes = estatisticas(apostas.periodo(mes_ini, dia))
-    return (corpo + f"\n\n📅 <b>No mês:</b> {fmt_placar(mes)}"
-            + f"\n\n💬 {frase_motivacional()}\n\n{AVISO_RESPONSAVEL}")
+    return (
+        f"{corpo}\n\n"
+        f"📅 𝗡𝗼 𝗺𝗲̂𝘀: <b>{fmt_placar(mes)}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"💬 <i>“{frase_motivacional()}”</i>\n\n"
+        f"{AVISO_RESPONSAVEL}"
+    )
 
 def texto_entradas_hoje(apostas: Apostas) -> str:
     dia = agora_cet().strftime("%Y-%m-%d")
     lista = apostas.periodo(dia, dia)
     if not lista:
-        return f"📋 Nenhuma entrada hoje ainda.\nPróxima: {proxima_entrada()} CET"
+        return f"📋😴 𝗡𝗲𝗻𝗵𝘂𝗺𝗮 𝗲𝗻𝘁𝗿𝗮𝗱𝗮 𝗵𝗼𝗷𝗲 𝗮𝗶𝗻𝗱𝗮.\n🎯 Próxima análise: <code>{proxima_entrada()}</code> CET"
     em = {"pendente": "⏳", "green": "✅", "red": "❌", "anulada": "⚪"}
-    linhas = ["📋 <b>Entradas de hoje</b>", ""]
+    linhas = ["📋⚡ 𝗘𝗡𝗧𝗥𝗔𝗗𝗔𝗦 𝗗𝗘 𝗛𝗢𝗝𝗘", "━━━━━━━━━━━━━━━━━━"]
     for a in lista:
         hk = datetime.fromisoformat(a["kickoff"]).strftime("%H:%M") if a["kickoff"] else f"{a['bloco']}h ao vivo"
-        extra = f" — {esc(a['placar'])}" if a.get("placar") else ""
-        linhas.append(f"{em.get(a['status'], '•')} {hk} · <b>{esc(a['pick'])}</b> "
-                      f"({esc(a['home'])} vs {esc(a['away'])}){extra}")
-    linhas += ["", f"📊 {fmt_placar(estatisticas(lista))}"]
+        extra = f" — <code>{esc(a['placar'])}</code>" if a.get("placar") else ""
+        linhas.append(
+            f"{em.get(a['status'], '•')} <code>{hk}</code> · 👑 <b>{esc(a['pick'])}</b> "
+            f"({esc(a['home'])} vs {esc(a['away'])}){extra}"
+        )
+    linhas += ["━━━━━━━━━━━━━━━━━━", f"📊 𝗣𝗹𝗮𝗰𝗮𝗿: <b>{fmt_placar(estatisticas(lista))}</b>"]
     return "\n".join(linhas)
 
 HORARIOS_TXT = (
@@ -3011,19 +3046,19 @@ def texto_saudacao_agendada(chave: str, apostas: Apostas) -> str:
     frase = frase_motivacional()
     dia = agora_cet().strftime("%Y-%m-%d")
     if chave == "bomdia":
-        return ("☀️ <b>Bom dia, galera!</b>\n\n"
-                f"💬 “{frase}”\n\n"
-                "🎯 Entrada ≈5 min antes de cada bloco (CET), só Czech Liga Pro.\n"
-                "Bora com disciplina! 💪")
+        return ("☀️🔥 𝗕𝗢𝗠 𝗗𝗜𝗔, 𝗚𝗔𝗟𝗘𝗥𝗔! 🔥☀️\n\n"
+                f"💬 <i>“{frase}”</i>\n\n"
+                "🏓 Filtro ligado 24h na <b>Czech Liga Pro</b>.\n"
+                "🎯 Alertas ≈5 min antes de cada bloco. Bora pra cima! 💪✨")
     if chave == "boatarde":
         st = estatisticas(apostas.periodo(dia, dia))
-        parcial = f"📊 Parcial de hoje: {fmt_placar(st)}\n" if (st["g"] or st["r"]) else ""
-        return ("🌤️ <b>Boa tarde, time!</b>\n\n"
-                f"💬 “{frase}”\n\n" + parcial +
-                "🎯 Próxima entrada ≈5 min antes do próximo bloco (CET)")
-    return ("🌙 <b>Boa noite, pessoal!</b>\n\n"
-            f"💬 “{frase}”\n\n"
-            "A entrada seguinte sai ≈5 min antes do próximo bloco. Descansem! 😴")
+        parcial = f"📊 𝗣𝗮𝗿𝗰𝗶𝗮𝗹 𝗱𝗲 𝗵𝗼𝗷𝗲: <b>{fmt_placar(st)}</b>\n" if (st["g"] or st["r"]) else ""
+        return ("🌤️⚡ 𝗕𝗢𝗔 𝗧𝗔𝗥𝗗𝗘, 𝗧𝗜𝗠𝗘! ⚡🌤️\n\n"
+                f"💬 <i>“{frase}”</i>\n\n" + parcial +
+                "🎯 Seguimos de olho no próximo bloco da Liga Pro! 👀🏓")
+    return ("🌙✨ 𝗕𝗢𝗔 𝗡𝗢𝗜𝗧𝗘, 𝗣𝗘𝗦𝗦𝗢𝗔𝗟! ✨🌙\n\n"
+            f"💬 <i>“{frase}”</i>\n\n"
+            "O bot continua vigiando a madrugada. Descansem bem! 😴🙌")
 
 def tarefas_agendadas(tg: "Telegram", apostas: Apostas, eventos: CacheSet, agora: Optional[datetime] = None,
                       livro: Optional[LivroEntradas] = None, forma: Optional[FormaDia] = None,
