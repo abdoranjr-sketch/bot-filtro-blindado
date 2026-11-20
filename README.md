@@ -17,6 +17,7 @@ Veja `.env.example`. **Nunca** coloque tokens no código nem faça commit do `.e
 | `TELEGRAM_DISCUSSION_ID` | grupo de discussão ligado ao canal (conversa e comandos) |
 | `TELEGRAM_OWNER_ID` | id do admin (padrão = `TELEGRAM_CHAT_ID`) |
 | `MOVIODDS_KEY` | chave do MoviOdds (odds) |
+| `MOVIODDS_KEY_2` | chave reserva do MoviOdds (opcional; usada por 30 min se a principal falhar) |
 | `DATA_DIR` | pasta persistente dos dados (ex.: `/data`) |
 
 ## Deploy
