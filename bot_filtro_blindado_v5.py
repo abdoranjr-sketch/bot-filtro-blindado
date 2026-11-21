@@ -2769,7 +2769,8 @@ class Apostas:
 
     def add(self, home: str, away: str, pick: str, bloco: str, origem: str,
             kickoff: Optional[datetime] = None, agora: Optional[datetime] = None,
-            odd: Optional[float] = None) -> bool:
+            odd: Optional[float] = None, esporte: str = "tenis_mesa",
+            liga: str = "Czech Liga Pro") -> bool:
         agora = agora or agora_cet()
         ref = kickoff.astimezone(TZ) if kickoff is not None and kickoff.tzinfo else (
             TZ.localize(kickoff) if kickoff is not None else agora)
@@ -2781,6 +2782,7 @@ class Apostas:
         self.itens.append({
             "id": id_, "dia": dia, "bloco": bloco, "origem": origem,
             "home": home, "away": away, "pick": pick,
+            "esporte": esporte, "liga": liga,
             "odd": round(float(odd), 2) if isinstance(odd, (int, float)) else None,
             "kickoff": kickoff.isoformat() if kickoff else None,
             "enviado": agora.isoformat(timespec="seconds"),
@@ -2837,9 +2839,13 @@ def resolver_apostas(apostas: Apostas, resultados: List[Resultado], agora: Optio
             if not (mesmo_sentido or invertido):
                 continue
 
-            sets_validos = max(r.sets_home, r.sets_away) >= 3 or (
-                (r.sets_home + r.sets_away) >= 3 and r.sets_home != r.sets_away
-            )
+            eh_basket = (a.get("esporte") == "basquete") or str(a.get("origem") or "").startswith("basket:")
+            if eh_basket:
+                sets_validos = max(r.sets_home, r.sets_away) >= 45 and r.sets_home != r.sets_away
+            else:
+                sets_validos = (max(r.sets_home, r.sets_away) >= 3 or (
+                    (r.sets_home + r.sets_away) >= 3 and r.sets_home != r.sets_away
+                )) and max(r.sets_home, r.sets_away) <= 5
             if not sets_validos:
                 continue
 
@@ -2882,7 +2888,7 @@ def resolver_apostas(apostas: Apostas, resultados: List[Resultado], agora: Optio
             a["resolvido"] = agora.isoformat(timespec="seconds")
             log.info("[RESOLVIDO] %s -> %s (%s)", pick, a["status"].upper(), a["placar"])
             n += 1
-        elif agora - ref > timedelta(hours=ANULAR_APOS_H):
+        elif agora - ref > timedelta(hours=(5 if (a.get("esporte") == "basquete" or str(a.get("origem") or "").startswith("basket:")) else ANULAR_APOS_H)):
             a["status"] = "anulada"
             a["resolvido"] = agora.isoformat(timespec="seconds")
             log.info("[ANULADA] %s (tempo limite excedido)", a.get("pick"))
@@ -2915,8 +2921,11 @@ def notificar_resultados(apostas: Apostas, tg: "Telegram") -> int:
         odd_val = a.get("odd")
         odd_txt = f" @ <code>{float(odd_val):.2f}</code>" if isinstance(odd_val, (int, float)) else ""
         alvo_exib, _ = _formatar_alvo_entrada(a.get("pick") or "")
+        eh_bk = _eh_aposta_basquete(a)
+        emoji_esp = "🏀" if eh_bk else "🏓"
+        liga_tag = f" ({_html(a['liga'])})" if eh_bk and a.get("liga") else ""
         conf = (
-            f"🏓 {nome_exibicao(a['home'])} vs {nome_exibicao(a['away'])}\n"
+            f"{emoji_esp} {nome_exibicao(a['home'])} vs {nome_exibicao(a['away'])}{liga_tag}\n"
             f"👑 Alvo: <b>{_html(alvo_exib)}</b>{odd_txt}"
         )
         if a["status"] in ("green", "red"):
@@ -2928,7 +2937,7 @@ def notificar_resultados(apostas: Apostas, tg: "Telegram") -> int:
                 if a["status"] == "green" else
                 f"Deu RED em {alvo_exib} ({a['placar']}). Placar hoje: {fmt_placar(hoje)}. Incentive disciplina e cabeça fria com emojis."
             )
-            texto += "\n\n💬 <i>" + _html(frase_dinamica_gemini(ctx_res, "🧠🛡️ " + frase_motivacional() + " 🏓🔥")) + "</i>"
+            texto += "\n\n💬 <i>" + _html(frase_dinamica_gemini(ctx_res, f"🧠🛡️ {frase_motivacional()} {emoji_esp}🔥")) + "</i>"
         else:
             cab = "⚪ <b>Entrada anulada</b>"
             corpo = f"{conf}\nResultado não encontrado — não conta no placar."
@@ -2978,6 +2987,9 @@ def _eh_aposta_pontos(a: dict) -> bool:
     pick = (a.get("pick") or "").strip().lower()
     return bool(re.match(r"^(over|under|mais de|menos de|pts|pontos)\b", pick))
 
+def _eh_aposta_basquete(a: dict) -> bool:
+    return (a.get("esporte") == "basquete") or str(a.get("origem") or "").startswith("basket:")
+
 def texto_placar(apostas: Apostas, titulo: str, d1: str, d2: str, por_bloco: bool = False) -> str:
     lista = apostas.periodo(d1, d2)
     st = estatisticas(lista)
@@ -2987,6 +2999,8 @@ def texto_placar(apostas: Apostas, titulo: str, d1: str, d2: str, por_bloco: boo
             f"━━━━━━━━━━━━━━━━━━\n"
             f"😴 Nenhuma entrada no período ainda. Seguimos na disciplina!"
         )
+    tt = [a for a in lista if not _eh_aposta_basquete(a)]
+    bk = [a for a in lista if _eh_aposta_basquete(a)]
     vencedores = [a for a in lista if not _eh_aposta_pontos(a)]
     pontos = [a for a in lista if _eh_aposta_pontos(a)]
     st_v = estatisticas(vencedores)
@@ -2999,6 +3013,14 @@ def texto_placar(apostas: Apostas, titulo: str, d1: str, d2: str, por_bloco: boo
         f"👑 𝗩𝗲𝗻𝗰𝗲𝗱𝗼𝗿: <b>{fmt_placar(st_v)}</b>" + (f" · ⏳ {st_v['p']} pend." if st_v["p"] else ""),
         f"📊 𝗣𝗼𝗻𝘁𝗼𝘀: <b>{fmt_placar(st_p)}</b>" + (f" · ⏳ {st_p['p']} pend." if st_p["p"] else ""),
     ]
+    if tt:
+        tt_v = estatisticas([a for a in tt if not _eh_aposta_pontos(a)])
+        tt_p = estatisticas([a for a in tt if _eh_aposta_pontos(a)])
+        linhas.append(f"🏓 𝗧𝗲̂𝗻𝗶𝘀 𝗱𝗲 𝗠𝗲𝘀𝗮: <b>{fmt_placar(estatisticas(tt))}</b> <i>(V: {tt_v['g']}✅/{tt_v['r']}❌ · P: {tt_p['g']}✅/{tt_p['r']}❌)</i>")
+    if bk:
+        bk_v = estatisticas([a for a in bk if not _eh_aposta_pontos(a)])
+        bk_p = estatisticas([a for a in bk if _eh_aposta_pontos(a)])
+        linhas.append(f"🏀 𝗕𝗮𝘀𝗾𝘂𝗲𝘁𝗲: <b>{fmt_placar(estatisticas(bk))}</b> <i>(V: {bk_v['g']}✅/{bk_v['r']}❌ · P: {bk_p['g']}✅/{bk_p['r']}❌)</i>")
     if st["v"]:
         linhas.append(f"⚪ 𝗔𝗻𝘂𝗹𝗮𝗱𝗮𝘀: <code>{st['v']}</code>")
     if st["p"]:
@@ -3070,14 +3092,111 @@ AJUDA_TXT = (
     "/semana — placar da semana\n"
     "/mes — placar do mês\n"
     "/entradas — entradas de hoje e status\n"
+    "/historico [nome] — forma recente (jogador ou time)\n"
+    "/h2h [A x B] — confronto direto recente\n"
     "/id — ID deste chat\n"
     "/ajuda — esta mensagem\n\n" + AVISO_RESPONSAVEL
 )
 
 ADMIN_CMDS = {"/status", "/lista", "/zerar", "/limpo", "/desgaste", "/derrota"}
 
+def _texto_historico_consulta(termo: str, forma: Optional[FormaDia], hist_b: Optional[HistoricoBasquete],
+                              hist_365: Optional[HistoricoSportsAPI365], agora: datetime) -> str:
+    termo = (termo or "").strip()
+    if not termo:
+        return "ℹ️ Use: <code>/historico Nome do Jogador</code> ou <code>/historico Nome do Time</code>"
+    linhas = [f"🔎 <b>Histórico recente: {esc(termo)}</b>", "━━━━━━━━━━━━━━━━━━"]
+    achou = False
+
+    if forma is not None:
+        jogos_tt = forma.partidas_de(termo)
+        if jogos_tt:
+            achou = True
+            fm = metricas_forma(termo, jogos_tt, agora)
+            linhas.append(f"🏓 <b>Czech Liga Pro</b> (score_forma: <code>{fm.score_forma:+.1f}</code> · {fm.jogos_hoje}j/3h):")
+            for p in jogos_tt[-5:]:
+                hk = p["fim"].strftime("%d/%m %H:%M") if p.get("fim") else "—"
+                pts_txt = f" ({p['total_pontos']} pts)" if p.get("total_pontos") else ""
+                linhas.append(f"• <code>{hk}</code> vs {esc(nome_exibicao(p.get('adversario') or ''))}: <b>{p['sets_favor']}-{p['sets_contra']}</b>{pts_txt}")
+
+    if hist_b is not None:
+        jogos_bk = hist_b.jogos_equipe(termo, agora)
+        if jogos_bk:
+            achou = True
+            mb = hist_b.metricas_equipe(termo, agora)
+            b2b_txt = " · ⚠️ B2B" if mb["b2b"] else ""
+            linhas.append(
+                f"🏀 <b>Basquete</b> (últimos {mb['n']}: {mb['vitorias']}V · média {mb['media_pro']:.1f} pró / {mb['media_contra']:.1f} contra{b2b_txt}):"
+            )
+            for j in jogos_bk[-5:]:
+                hk = j["fim"].strftime("%d/%m %H:%M") if j.get("fim") else "—"
+                local_tag = "Casa" if j.get("casa") else "Fora"
+                res_em = "✅" if j.get("venceu") else "❌"
+                linhas.append(f"• {res_em} <code>{hk}</code> ({local_tag}) vs {esc(j.get('adv') or '')}: <b>{j['pts_pro']}-{j['pts_contra']}</b>")
+
+    if hist_365 is not None and getattr(hist_365, "ativo", False):
+        try:
+            info = hist_365.forma(termo, [termo], agora)
+            if info:
+                achou = True
+                linhas.append(f"📅 <b>Histórico 7d:</b> {info[0]} V / {info[1]} D ({info[2]}% limpas)")
+        except Exception:
+            pass
+
+    if not achou:
+        return f"😴 Nenhum jogo recente encontrado no cache para <b>{esc(termo)}</b>."
+    return "\n".join(linhas)
+
+
+def _texto_h2h_consulta(arg: str, forma: Optional[FormaDia], hist_b: Optional[HistoricoBasquete],
+                        hist_365: Optional[HistoricoSportsAPI365], agora: datetime) -> str:
+    partes = re.split(r"\s+(?:vs\.?|x)\s+", (arg or "").strip(), maxsplit=1, flags=re.IGNORECASE)
+    if len(partes) < 2 or not partes[0].strip() or not partes[1].strip():
+        return "ℹ️ Use: <code>/h2h Jogador A x Jogador B</code> ou <code>/h2h Time A vs Time B</code>"
+    p1, p2 = partes[0].strip(), partes[1].strip()
+    linhas = [f"⚔️ <b>H2H: {esc(p1)} vs {esc(p2)}</b>", "━━━━━━━━━━━━━━━━━━"]
+    achou = False
+
+    if forma is not None:
+        duelos_tt = [p for p in forma.partidas_de(p1) if mesmo_jogador(p.get("adversario") or "", p2)]
+        if duelos_tt:
+            achou = True
+            v1 = sum(1 for p in duelos_tt if int(p["sets_favor"]) > int(p["sets_contra"]))
+            v2 = len(duelos_tt) - v1
+            linhas.append(f"🏓 <b>Recente (janela):</b> {esc(p1)} {v1} x {v2} {esc(p2)}")
+            for p in duelos_tt[-5:]:
+                hk = p["fim"].strftime("%d/%m %H:%M") if p.get("fim") else "—"
+                linhas.append(f"• <code>{hk}</code>: <b>{p['sets_favor']}-{p['sets_contra']}</b>")
+
+    if hist_b is not None:
+        duelos_bk = [j for j in hist_b.jogos_equipe(p1, agora) if mesmo_jogador(j.get("adv") or "", p2)]
+        if duelos_bk:
+            achou = True
+            v1 = sum(1 for j in duelos_bk if j.get("venceu"))
+            v2 = len(duelos_bk) - v1
+            linhas.append(f"🏀 <b>Basquete (14d):</b> {esc(p1)} {v1} x {v2} {esc(p2)}")
+            for j in duelos_bk[-5:]:
+                hk = j["fim"].strftime("%d/%m %H:%M") if j.get("fim") else "—"
+                linhas.append(f"• <code>{hk}</code>: <b>{j['pts_pro']}-{j['pts_contra']}</b>")
+
+    if hist_365 is not None and getattr(hist_365, "ativo", False):
+        try:
+            par = hist_365.h2h(p1, p2, [p1, p2], agora)
+            if par is not None:
+                achou = True
+                linhas.append(f"📅 <b>H2H 14d (SportsAPI365):</b> {esc(p1)} {par[0]} x {par[1]} {esc(p2)}")
+        except Exception:
+            pass
+
+    if not achou:
+        return f"😴 Nenhum confronto direto recente encontrado entre <b>{esc(p1)}</b> e <b>{esc(p2)}</b>."
+    return "\n".join(linhas)
+
 def processar_comando(text: str, hist: Historico, tg: "Telegram", apostas: Apostas,
-                      chat_id: str, user_id: str, msg_id: Optional[int] = None) -> bool:
+                      chat_id: str, user_id: str, msg_id: Optional[int] = None,
+                      forma: Optional[FormaDia] = None,
+                      hist_b: Optional["HistoricoBasquete"] = None,
+                      hist_365: Optional[HistoricoSportsAPI365] = None) -> bool:
     text = text.strip()
     partes = text.split(maxsplit=1)
     cmd = partes[0].lower().split("@", 1)[0]
@@ -3106,6 +3225,12 @@ def processar_comando(text: str, hist: Historico, tg: "Telegram", apostas: Apost
         return True
     if cmd == "/entradas":
         resp(texto_entradas_hoje(apostas))
+        return True
+    if cmd in ("/historico", "/hist"):
+        resp(_texto_historico_consulta(arg, forma, hist_b, hist_365, agora))
+        return True
+    if cmd == "/h2h":
+        resp(_texto_h2h_consulta(arg, forma, hist_b, hist_365, agora))
         return True
 
     if cmd in ADMIN_CMDS:
@@ -3705,7 +3830,10 @@ def boas_vindas(membros: List[dict]) -> Optional[str]:
             "com green/red de cada jogo e resumo às 22:30.\nDigite /ajuda para ver os comandos.\n\n"
             + AVISO_RESPONSAVEL)
 
-def tratar_update(u: dict, tg: "Telegram", hist: Historico, apostas: Apostas, conversa: Conversa) -> Optional[str]:
+def tratar_update(u: dict, tg: "Telegram", hist: Historico, apostas: Apostas, conversa: Conversa,
+                  forma: Optional[FormaDia] = None,
+                  hist_b: Optional["HistoricoBasquete"] = None,
+                  hist_365: Optional[HistoricoSportsAPI365] = None) -> Optional[str]:
     mcm = u.get("my_chat_member")
     if mcm:
         chat = mcm.get("chat") or {}
@@ -3747,7 +3875,8 @@ def tratar_update(u: dict, tg: "Telegram", hist: Historico, apostas: Apostas, co
         if len(cmd) > 1 and conversa.bot_username and cmd[1] != conversa.bot_username:
             return None
         if cmd[0] == "/id" or permitido:
-            processar_comando(text, hist, tg, apostas, chat_id, user_id, msg.get("message_id"))
+            processar_comando(text, hist, tg, apostas, chat_id, user_id, msg.get("message_id"),
+                              forma=forma, hist_b=hist_b, hist_365=hist_365)
             return "comando"
         return None
     if not conversa_ok or msg.get("sender_chat"):
@@ -3757,6 +3886,593 @@ def tratar_update(u: dict, tg: "Telegram", hist: Historico, apostas: Apostas, co
         tg.send(resposta, chat_id=chat_id, reply_to=msg.get("message_id"))
         return "conversa"
     return None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BASQUETE (NBA + LIGAS EUROPEIAS — MOVIODDS_KEY_2 + GEMINI SEARCH)
+# ══════════════════════════════════════════════════════════════════════════════
+
+BASKET_FORMA_FILE = DATA_DIR / "forma_basket_v5.json"
+BASKET_ODDS_CACHE_FILE = DATA_DIR / "odds_basket_cache_v5.json"
+BASKET_ALERTAS_FILE = DATA_DIR / "basket_alertas_v5.json"
+BASKET_RES_CONSULTA_FILE = DATA_DIR / "basket_res_consulta_v5.json"
+
+BASKET_ODD_MIN = 1.30
+BASKET_ODD_MAX = 2.15
+BASKET_JANELA_ENTRADA_MIN = 35   # alerta entre 35 min e 5 min antes do tip-off
+BASKET_ODDS_TTL_S = 35 * 60
+BASKET_B2B_HORAS = 27.0          # back-to-back (NBA / EuroLeague dupla rodada)
+BASKET_3EM4_HORAS = 96.0         # 3 jogos em 4 dias
+
+LIGAS_BASQUETE_OK = (
+    "nba",
+    "euroleague",
+    "eurocup",
+    "acb",
+    "liga endesa",
+    "bsl",
+    "super lig",
+    "lega a",
+    "lba",
+    "basket league",
+    "pro a",
+    "betclic elite",
+    "bbl",
+    "aba league",
+    "vtb",
+)
+
+def eh_liga_basquete_alvo(nome: Optional[str]) -> bool:
+    n = re.sub(r"[^a-z0-9]+", " ", (nome or "").lower()).strip()
+    if not n:
+        return False
+    if any(w in n.split() for w in ("women", "woman", "wnba", "feminino", "feminina", "u18", "u20", "ncaa", "gleague", "g league")):
+        return False
+    return any(k in n for k in LIGAS_BASQUETE_OK)
+
+def _rotulo_liga_basquete(nome: Optional[str]) -> str:
+    n = (nome or "").lower()
+    if "nba" in n:
+        return "NBA"
+    if "euroleague" in n:
+        return "EuroLeague"
+    if "eurocup" in n:
+        return "EuroCup"
+    if "acb" in n or "endesa" in n:
+        return "Liga ACB"
+    return (nome or "Basquete").strip()
+
+def _extrair_total_basquete_quote(q: dict) -> Optional[Tuple[float, str, float]]:
+    odd = q.get("odds_dec")
+    if not odd or not (float(odd) > 1):
+        return None
+    grupo = (q.get("group_name") or "").strip().lower()
+    if any(k in grupo for k in ("1st", "2nd", "3rd", "4th", "half", "quarter", "team total", "handicap", "spread", "player")):
+        return None
+    if not any(k in grupo for k in ("total", "over/under", "game total", "points")):
+        return None
+    side_raw = (q.get("side") or q.get("label") or "").strip().lower()
+    linha_raw = str(q.get("line") or "").strip().lower()
+    lado = None
+    if side_raw.startswith("over") or side_raw.startswith("mais") or "over" in side_raw:
+        lado = "Over"
+    elif side_raw.startswith("under") or side_raw.startswith("menos") or "under" in side_raw:
+        lado = "Under"
+    if not lado:
+        return None
+    m_linha = re.search(r"(\d+(?:\.\d+)?)", linha_raw) or re.search(r"(\d+(?:\.\d+)?)", side_raw)
+    if not m_linha:
+        return None
+    linha = float(m_linha.group(1))
+    # Linhas típicas de jogo completo NBA (200-260) e Europa (140-195)
+    if not (130.0 <= linha <= 275.0):
+        return None
+    return linha, lado, float(odd)
+
+def _e_vencedor_basquete(q: dict) -> bool:
+    odd = q.get("odds_dec")
+    if not odd or not (float(odd) > 1):
+        return False
+    grupo = (q.get("group_name") or "").strip().lower()
+    if any(k in grupo for k in ("1st", "2nd", "3rd", "4th", "half", "quarter", "handicap", "spread", "3-way", "3 way")):
+        return False
+    return grupo in ("moneyline", "money line", "to win", "to win match", "match winner", "game", "winner", "match")
+
+@dataclass
+class BasketGame:
+    league: str
+    home: str
+    away: str
+    odd_home: Optional[float]
+    odd_away: Optional[float]
+    in_play: bool
+    kickoff: Optional[datetime]
+    total_linha: Optional[float] = None
+    odd_over: Optional[float] = None
+    odd_under: Optional[float] = None
+
+def parse_odds_basquete(data: dict) -> List[BasketGame]:
+    out: List[BasketGame] = []
+    for m in data.get("matches") or []:
+        liga_raw = m.get("league") or ""
+        if not eh_liga_basquete_alvo(liga_raw):
+            continue
+        home, away = (m.get("home") or "").strip(), (m.get("away") or "").strip()
+        if not home or not away:
+            continue
+        odd_h = odd_a = None
+        totais: Dict[float, Dict[str, float]] = {}
+        for q in m.get("quotes") or []:
+            if _e_vencedor_basquete(q):
+                side = (q.get("side") or q.get("label") or "").strip().lower()
+                if side in ("home", "1") or home.lower() in side:
+                    odd_h = float(q["odds_dec"])
+                elif side in ("away", "2") or away.lower() in side:
+                    odd_a = float(q["odds_dec"])
+                continue
+            tp = _extrair_total_basquete_quote(q)
+            if tp:
+                linha, lado, odd_tp = tp
+                totais.setdefault(linha, {})[lado] = odd_tp
+        total_linha = odd_over = odd_under = None
+        melhor_diff = 999.0
+        for linha, lados in totais.items():
+            ov, un = lados.get("Over"), lados.get("Under")
+            if ov and un and abs(ov - un) < melhor_diff:
+                melhor_diff = abs(ov - un)
+                total_linha, odd_over, odd_under = linha, ov, un
+            elif total_linha is None and (ov or un):
+                total_linha, odd_over, odd_under = linha, ov, un
+        out.append(BasketGame(
+            league=_rotulo_liga_basquete(liga_raw),
+            home=home, away=away,
+            odd_home=odd_h, odd_away=odd_a,
+            in_play=bool(m.get("in_play")),
+            kickoff=_parse_kickoff(m.get("kickoff_utc")),
+            total_linha=total_linha, odd_over=odd_over, odd_under=odd_under,
+        ))
+    return out
+
+def _placar_basquete(texto: str) -> Optional[Tuple[int, int]]:
+    s = (texto or "").strip()
+    m = re.match(r"^\s*(\d{2,3})\s*[-:]\s*(\d{2,3})", s)
+    if not m:
+        return None
+    h, a = int(m.group(1)), int(m.group(2))
+    if h == a or max(h, a) < 45:
+        return None
+    return h, a
+
+def parse_results_basquete(data: dict) -> List[dict]:
+    out: List[dict] = []
+    for m in data.get("results") or []:
+        liga_raw = m.get("league") or ""
+        if not eh_liga_basquete_alvo(liga_raw) or m.get("status") != "finished":
+            continue
+        pl = _placar_basquete(m.get("final_score") or m.get("score") or "")
+        if not pl:
+            continue
+        sh, sa = pl
+        ko = _parse_kickoff(m.get("kickoff_utc"))
+        fim = _parse_kickoff(m.get("finished_at")) or (ko + timedelta(hours=2, minutes=15) if ko else None)
+        if fim is None:
+            continue
+        if ko is None:
+            ko = fim - timedelta(hours=2, minutes=15)
+        out.append({
+            "id": str(m.get("fixture_id") or f"{m.get('home')}|{m.get('away')}|{ko.isoformat()}"),
+            "league": _rotulo_liga_basquete(liga_raw),
+            "home": (m.get("home") or "").strip(),
+            "away": (m.get("away") or "").strip(),
+            "pts_home": sh,
+            "pts_away": sa,
+            "total_pontos": sh + sa,
+            "inicio": ko.isoformat(),
+            "fim": fim.isoformat(),
+        })
+    return out
+
+class HistoricoBasquete:
+    """Guarda últimos 14 dias de jogos finalizados de NBA e Ligas Europeias para pace, forma e B2B."""
+    def __init__(self, path: Path = BASKET_FORMA_FILE):
+        self.path = path
+        self.jogos: List[dict] = []
+        self.load()
+
+    def load(self):
+        if self.path.exists():
+            try:
+                raw = json.loads(self.path.read_text(encoding="utf-8"))
+                self.jogos = list(raw.get("jogos") or [])
+            except Exception:
+                self.jogos = []
+
+    def save(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"jogos": self.jogos}, ensure_ascii=False, indent=1), encoding="utf-8")
+        tmp.replace(self.path)
+
+    def mesclar(self, novos: List[dict], agora: datetime):
+        limite = agora.astimezone(TZ) - timedelta(days=14)
+        por_id = {j.get("id"): j for j in self.jogos if j.get("id")}
+        for j in novos or []:
+            if j.get("id"):
+                por_id[j["id"]] = j
+        filtrados = []
+        for j in por_id.values():
+            fim = _dt_de(j.get("fim"))
+            if fim is None or fim >= limite:
+                filtrados.append(j)
+        filtrados.sort(key=lambda x: x.get("fim") or "")
+        self.jogos = filtrados
+        self.save()
+
+    def jogos_equipe(self, equipe: str, agora: datetime) -> List[dict]:
+        ag = _kickoff_local(agora)
+        out = []
+        for j in self.jogos:
+            fim = _dt_de(j.get("fim"))
+            if fim is None or fim > ag:
+                continue
+            if mesmo_jogador(j.get("home") or "", equipe):
+                pf, pc, casa = int(j["pts_home"]), int(j["pts_away"]), True
+            elif mesmo_jogador(j.get("away") or "", equipe):
+                pf, pc, casa = int(j["pts_away"]), int(j["pts_home"]), False
+            else:
+                continue
+            out.append({
+                "fim": fim,
+                "inicio": _dt_de(j.get("inicio")) or fim,
+                "pts_pro": pf,
+                "pts_contra": pc,
+                "venceu": pf > pc,
+                "casa": casa,
+                "adv": (j.get("away") if casa else j.get("home")) or "",
+            })
+        out.sort(key=lambda x: x["fim"])
+        return out
+
+    def metricas_equipe(self, equipe: str, kickoff: datetime) -> dict:
+        ko = _kickoff_local(kickoff)
+        hist_eq = self.jogos_equipe(equipe, ko)
+        recentes = hist_eq[-5:]
+        b2b = False
+        tres_em_quatro = False
+        road_trip = 0
+        if hist_eq:
+            ult_fim = hist_eq[-1]["fim"]
+            horas_descanso = (ko - ult_fim).total_seconds() / 3600.0
+            b2b = 0 < horas_descanso <= BASKET_B2B_HORAS
+            jogos_96h = [x for x in hist_eq if (ko - x["fim"]).total_seconds() / 3600.0 <= BASKET_3EM4_HORAS]
+            tres_em_quatro = len(jogos_96h) >= 2
+            for x in reversed(hist_eq):
+                if not x["casa"]:
+                    road_trip += 1
+                else:
+                    break
+        if recentes:
+            media_pro = sum(x["pts_pro"] for x in recentes) / len(recentes)
+            media_contra = sum(x["pts_contra"] for x in recentes) / len(recentes)
+            vitorias = sum(1 for x in recentes if x["venceu"])
+            win_rate = vitorias / len(recentes)
+        else:
+            media_pro = media_contra = 0.0
+            vitorias = 0
+            win_rate = 0.5
+        return {
+            "n": len(recentes),
+            "media_pro": media_pro,
+            "media_contra": media_contra,
+            "win_rate": win_rate,
+            "vitorias": vitorias,
+            "b2b": b2b,
+            "tres_em_quatro": tres_em_quatro,
+            "road_trip": road_trip,
+        }
+
+def consultar_gemini_basquete_web(prompt: str) -> str:
+    """Consulta Gemini com Google Search grounding para checar desfalques/lesões em tempo real."""
+    chave = _chave_gemini()
+    if not chave or not (prompt or "").strip():
+        return ""
+    prazo = time.monotonic() + 12.0
+    for modelo in _modelos_gemini():
+        resta = prazo - time.monotonic()
+        if resta < 0.8:
+            break
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent"
+        try:
+            resp = requests.post(
+                url,
+                headers={"x-goog-api-key": chave, "Content-Type": "application/json"},
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "tools": [{"google_search": {}}],
+                    "generationConfig": {"temperature": 0.15, "maxOutputTokens": 260},
+                },
+                timeout=max(1.0, resta),
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            cands = data.get("candidates") or []
+            parts = ((cands[0].get("content") or {}).get("parts") if cands else None) or []
+            texto = "".join(p.get("text") or "" for p in parts if isinstance(p, dict)).strip()
+            if texto:
+                log.info("[GEMINI BASKET SEARCH] via %s (%s chars)", modelo, len(texto))
+                return texto
+        except Exception as exc:
+            log.info("[GEMINI BASKET SEARCH] fallback (%s)", type(exc).__name__)
+            continue
+    return consultar_gemini(prompt)
+
+def analisar_basquete_jogo(g: BasketGame, hist_b: HistoricoBasquete) -> List[Decisao]:
+    """Gera decisões de Vencedor e/ou Pontos (Over/Under) para NBA e Ligas Europeias."""
+    if g.kickoff is None or g.in_play:
+        return []
+    mh = hist_b.metricas_equipe(g.home, g.kickoff)
+    ma = hist_b.metricas_equipe(g.away, g.kickoff)
+    decisoes: List[Decisao] = []
+
+    # Score de vantagem estrutural (mando + forma + descanso/B2B + road trip)
+    score_h = (mh["win_rate"] * 4.0) + 1.2  # bônus mando de quadra
+    score_a = (ma["win_rate"] * 4.0)
+    if ma["b2b"]:
+        score_h += 2.2
+    if mh["b2b"]:
+        score_a += 2.2
+    if ma["tres_em_quatro"]:
+        score_h += 1.0
+    if mh["tres_em_quatro"]:
+        score_a += 1.0
+    if ma["road_trip"] >= 3:
+        score_h += 1.0
+
+    # 1) Mercado VENCEDOR (Moneyline)
+    if score_h >= score_a:
+        fav, odd_fav, fav_m, adv_m, gap_v = g.home, g.odd_home, mh, ma, round(score_h - score_a, 1)
+    else:
+        fav, odd_fav, fav_m, adv_m, gap_v = g.away, g.odd_away, ma, mh, round(score_a - score_h, 1)
+
+    if (
+        odd_fav and BASKET_ODD_MIN <= odd_fav <= BASKET_ODD_MAX
+        and not fav_m["b2b"]
+        and (gap_v >= 2.4 or (adv_m["b2b"] and gap_v >= 1.8))
+    ):
+        fatores = []
+        if adv_m["b2b"]:
+            fatores.append("adversário em B2B cansado")
+        if adv_m["road_trip"] >= 3:
+            fatores.append(f"visitante no {adv_m['road_trip']}º jogo seguido fora")
+        if fav == g.home:
+            fatores.append("mando de quadra")
+        motivos = [
+            f"✓ Alvo Basquete ({g.league}): <b>{_html(fav)}</b> @ {odd_fav:.2f}",
+            f"✓ Vantagem estrutural: gap {gap_v:.1f} ({', '.join(fatores) or 'forma superior'})",
+        ]
+        decisoes.append(Decisao("verde", motivos, fav, gap_v, odd_fav, score_h, score_a, 0.0))
+
+    # 2) Mercado PONTOS (Over / Under)
+    if g.total_linha and mh["n"] >= 2 and ma["n"] >= 2:
+        proj_pts = ((mh["media_pro"] + ma["media_contra"]) / 2.0) + ((ma["media_pro"] + mh["media_contra"]) / 2.0)
+        # Ajuste de fadiga: dois times cansados/B2B tendem a ritmo mais lento
+        if mh["b2b"] and ma["b2b"]:
+            proj_pts -= 4.5
+        diff_pts = proj_pts - float(g.total_linha)
+
+        if g.odd_over and BASKET_ODD_MIN <= g.odd_over <= BASKET_ODD_MAX and diff_pts >= 4.5 and not (mh["b2b"] and ma["b2b"]):
+            alvo_p = f"Over {g.total_linha:g}"
+            motivos_p = [
+                f"✓ Pontos ({g.league}): <b>{alvo_p} pts</b> @ {g.odd_over:.2f}",
+                f"✓ Projeção ofensiva/pace: {proj_pts:.1f} pts vs linha {g.total_linha:g} (+{diff_pts:.1f})",
+            ]
+            decisoes.append(Decisao("verde", motivos_p, alvo_p, round(diff_pts, 1), g.odd_over, proj_pts, float(g.total_linha), 0.0))
+        elif g.odd_under and BASKET_ODD_MIN <= g.odd_under <= BASKET_ODD_MAX and diff_pts <= -4.5:
+            alvo_p = f"Under {g.total_linha:g}"
+            motivos_p = [
+                f"✓ Pontos ({g.league}): <b>{alvo_p} pts</b> @ {g.odd_under:.2f}",
+                f"✓ Ritmo controlado/fadiga: {proj_pts:.1f} pts vs linha {g.total_linha:g} ({diff_pts:.1f})",
+            ]
+            decisoes.append(Decisao("verde", motivos_p, alvo_p, round(abs(diff_pts), 1), g.odd_under, proj_pts, float(g.total_linha), 0.0))
+
+    return decisoes
+
+def validar_basquete_gemini(g: BasketGame, d: Decisao, hist_b: HistoricoBasquete) -> str:
+    """Usa Gemini com pesquisa web para validar desfalques/lesões e time completo vs desfalcado."""
+    if not _chave_gemini() or g.kickoff is None:
+        return "Confiança: Média — análise estatística e descanso aprovados."
+    mh = hist_b.metricas_equipe(g.home, g.kickoff)
+    ma = hist_b.metricas_equipe(g.away, g.kickoff)
+    dia_txt = g.kickoff.strftime("%Y-%m-%d %H:%M CET")
+    prompt = (
+        f"Você é especialista em apostas de basquete ({g.league}). Pesquise as notícias e injury report de HOJE ({dia_txt}) "
+        f"para o jogo {g.home} vs {g.away}.\n"
+        f"Entrada candidata: {d.alvo} @ {d.odd:.2f}.\n"
+        f"Dados internos: {g.home} (B2B={'sim' if mh['b2b'] else 'não'}, média {mh['media_pro']:.1f} pts) vs "
+        f"{g.away} (B2B={'sim' if ma['b2b'] else 'não'}, média {ma['media_pro']:.1f} pts).\n"
+        "Verifique desfalques de titulares/estrelas, load management e se há time completo contra time desfalcado.\n"
+        "Se o alvo da aposta tiver desfalques graves que invalidem a entrada (ou desfalque ofensivo pesado no Over), "
+        "comece obrigatoriamente com 'Confiança: Baixa — '.\n"
+        "Caso contrário, comece com 'Confiança: Alta — ' (se houver vantagem clara de elenco/desfalque rival/cansaço) "
+        "ou 'Confiança: Média — ', seguido de um resumo curto (máx 170 caracteres)."
+    )
+    txt = consultar_gemini_basquete_web(prompt)
+    return _limpar_veredito(txt) or "Confiança: Média — cenário favorável pelos números."
+
+def _texto_entrada_basquete(g: BasketGame, d: Decisao, veredito: str) -> str:
+    hora = g.kickoff.strftime("%H:%M") if g.kickoff else "—"
+    odd_txt = f"{d.odd:.2f}" if isinstance(d.odd, (int, float)) else "—"
+    stake = "1.0 un 🔥" if "confiança: alta" in veredito.lower() else "0.5 un 🛡️"
+    alvo_txt, eh_pontos = _formatar_alvo_entrada(d.alvo or "")
+    bloco_gemini = f"🤖 𝗚𝗲𝗺𝗶𝗻𝗶 (Injury/Contexto): <i>{_html(veredito)}</i>\n" if veredito else ""
+    ctx_frase = (
+        f"Basquete {g.league}: {alvo_txt} em {g.home} vs {g.away} @ {odd_txt}. {veredito}"
+        if eh_pontos else
+        f"Basquete {g.league}: vitória de {alvo_txt} contra {g.away if alvo_txt == g.home else g.home} @ {odd_txt}. {veredito}"
+    )
+    return (
+        f"🏀🔥 𝗦𝗜𝗡𝗔𝗟 𝗕𝗔𝗦𝗤𝗨𝗘𝗧𝗘 ({_html(g.league)}) 🔥🏀\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"⏰ 𝗛𝗼𝗿𝗮́𝗿𝗶𝗼: <code>{hora}</code> CET\n"
+        f"🏟️ 𝗝𝗼𝗴𝗼: {_html(g.home)} vs {_html(g.away)}\n"
+        f"👑 𝗔𝗹𝘃𝗼: <b>{_html(alvo_txt)}</b>\n"
+        f"💰 𝗢𝗱𝗱: <code>{odd_txt}</code>  |  🎯 𝗦𝘁𝗮𝗸𝗲: <code>{stake}</code>\n"
+        f"{bloco_gemini}"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"💬 <i>{_html(frase_dinamica_gemini(ctx_frase, '🏀🎯 Gestão de banca e foco no longo prazo! 💪🔥'))}</i>"
+    )
+
+class GerenciadorBasquete:
+    """Controla consultas da MOVIODDS_KEY_2 (sem tocar na cota do tênis de mesa) e gera/liquida sinais."""
+    def __init__(self, movi_b: MoviOdds, hist_b: HistoricoBasquete):
+        self.movi = movi_b
+        self.hist = hist_b
+        self.jogos_cache: List[BasketGame] = []
+        self.ultima_consulta_odds: float = 0.0
+        self.ultima_consulta_res: float = 0.0
+        self.alertas = CacheSet(BASKET_ALERTAS_FILE, limite=400)
+        self._carregar_cache()
+
+    def _carregar_cache(self):
+        if BASKET_ODDS_CACHE_FILE.exists():
+            try:
+                raw = json.loads(BASKET_ODDS_CACHE_FILE.read_text(encoding="utf-8"))
+                self.ultima_consulta_odds = float(raw.get("quando") or 0.0)
+                for item in raw.get("lista") or []:
+                    self.jogos_cache.append(BasketGame(
+                        league=item.get("league") or "Basquete",
+                        home=item.get("home") or "",
+                        away=item.get("away") or "",
+                        odd_home=item.get("odd_home"),
+                        odd_away=item.get("odd_away"),
+                        in_play=bool(item.get("in_play")),
+                        kickoff=_parse_kickoff(item.get("kickoff")),
+                        total_linha=item.get("total_linha"),
+                        odd_over=item.get("odd_over"),
+                        odd_under=item.get("odd_under"),
+                    ))
+            except Exception:
+                pass
+
+    def _salvar_cache(self):
+        BASKET_ODDS_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "quando": self.ultima_consulta_odds,
+            "lista": [
+                {
+                    "league": g.league, "home": g.home, "away": g.away,
+                    "odd_home": g.odd_home, "odd_away": g.odd_away,
+                    "in_play": g.in_play,
+                    "kickoff": g.kickoff.isoformat() if g.kickoff else None,
+                    "total_linha": g.total_linha,
+                    "odd_over": g.odd_over, "odd_under": g.odd_under,
+                }
+                for g in self.jogos_cache
+            ],
+        }
+        tmp = BASKET_ODDS_CACHE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(BASKET_ODDS_CACHE_FILE)
+
+    def _tem_jogo_proximo(self, agora: datetime, min_frente: int = 75) -> bool:
+        for g in self.jogos_cache:
+            if g.kickoff is None or g.in_play:
+                continue
+            delta_m = (_kickoff_local(g.kickoff) - agora).total_seconds() / 60.0
+            if -5 <= delta_m <= min_frente:
+                return True
+        return False
+
+    def atualizar_odds_se_devido(self, agora: datetime, ts: float):
+        if not self.movi.keys:
+            return
+        # Consulta a cada 30 min quando há jogo próximo, ou a cada 90 min para atualizar a grade do dia
+        intervalo = 30 * 60 if self._tem_jogo_proximo(agora, 75) else 90 * 60
+        if self.ultima_consulta_odds > 0 and (ts - self.ultima_consulta_odds) < intervalo:
+            return
+        self.ultima_consulta_odds = ts
+        lista, erro = _chamar_anotando_erro(
+            lambda: self.movi._run(self.movi.URL, {"sport": "basketball"}, parse_odds_basquete)
+        )
+        if not erro:
+            self.jogos_cache = lista
+            self._salvar_cache()
+            log.info("[BASQUETE ODDS] consulta MOVIODDS_KEY_2 -> %s jogos (NBA/Europa)", len(lista))
+
+    def atualizar_resultados_se_devido(self, agora: datetime, ts: float, tem_pendentes_basket: bool):
+        if not self.movi.keys:
+            return
+        # Atualiza resultados a cada 45 min se há pendente de basquete, ou 1x a cada 3h para manter forma/B2B
+        intervalo = 45 * 60 if tem_pendentes_basket else 3 * 3600
+        if self.ultima_consulta_res > 0 and (ts - self.ultima_consulta_res) < intervalo:
+            return
+        self.ultima_consulta_res = ts
+        hoje_utc = agora.astimezone(pytz.utc).strftime("%Y-%m-%d")
+        ontem_utc = (agora.astimezone(pytz.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+        res_hoje, err1 = _chamar_anotando_erro(
+            lambda: self.movi._run(self.movi.RESULTS_URL, {"sport": "basketball", "date": hoje_utc}, parse_results_basquete)
+        )
+        # Busca ontem apenas uma vez por dia (manhã CET) para alimentar B2B e forma
+        res_ontem: List[dict] = []
+        if agora.hour in (7, 8, 9, 10) and len(self.hist.jogos) < 20:
+            res_ontem, _ = _chamar_anotando_erro(
+                lambda: self.movi._run(self.movi.RESULTS_URL, {"sport": "basketball", "date": ontem_utc}, parse_results_basquete)
+            )
+        if not err1:
+            self.hist.mesclar(res_hoje + res_ontem, agora)
+            log.info("[BASQUETE RESULTADOS] %s jogos atualizados", len(res_hoje) + len(res_ontem))
+
+    def resultados_para_liquidacao(self) -> List[Resultado]:
+        out: List[Resultado] = []
+        for j in self.hist.jogos:
+            try:
+                sh, sa = int(j["pts_home"]), int(j["pts_away"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            out.append(Resultado(
+                home=j.get("home") or "",
+                away=j.get("away") or "",
+                sets_home=sh,
+                sets_away=sa,
+                kickoff=_dt_de(j.get("inicio")),
+                match_id=str(j.get("id") or "basket"),
+                total_pontos=int(j.get("total_pontos") or (sh + sa)),
+            ))
+        return out
+
+    def processar_entradas(self, agora: datetime, tg: Telegram, apostas: Apostas, livro: LivroEntradas):
+        if not self.movi.keys:
+            return
+        for g in self.jogos_cache:
+            if g.kickoff is None or g.in_play:
+                continue
+            ko = _kickoff_local(g.kickoff)
+            mins_para_inicio = (ko - agora).total_seconds() / 60.0
+            if not (4.0 <= mins_para_inicio <= BASKET_JANELA_ENTRADA_MIN):
+                continue
+            dia = ko.strftime("%Y-%m-%d")
+            chave_jogo = f"basket|{dia}|{chave_par(g.home, g.away)}"
+            if self.alertas.has(chave_jogo):
+                continue
+            self.alertas.add(chave_jogo)
+
+            decisoes = analisar_basquete_jogo(g, self.hist)
+            for d in decisoes:
+                if d.status != "verde" or not d.alvo:
+                    continue
+                veredito = validar_basquete_gemini(g, d, self.hist)
+                if "confiança: baixa" in veredito.lower():
+                    log.info("[GEMINI BASKET VETO] %s vs %s (%s) | %s", g.home, g.away, d.alvo, veredito)
+                    continue
+                msg = _texto_entrada_basquete(g, d, veredito)
+                if tg.send(msg):
+                    bloco = f"{ko.hour:02d}"
+                    apostas.add(
+                        g.home, g.away, d.alvo, bloco, f"basket:{g.league}",
+                        ko, agora=agora, odd=d.odd, esporte="basquete", liga=g.league,
+                    )
+                    livro.registrar(g.home, g.away, d.alvo, ko, d.odd, d.gap, veredito)
+                    log.info("[BASQUETE ENTRADA] %s | %s vs %s -> %s @ %.2f", g.league, g.home, g.away, d.alvo, d.odd or 0.0)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN
@@ -3782,7 +4498,8 @@ def main():
     tg = Telegram(TELEGRAM_TOKEN, GROUP_ID)
     hist = Historico()
     scoremondo = ScoreMondo()
-    moviodds = MoviOdds([MOVIODDS_KEY, MOVIODDS_KEY_2])
+    moviodds = MoviOdds([MOVIODDS_KEY]) if MOVIODDS_KEY else MoviOdds([])
+    moviodds_basket = MoviOdds([MOVIODDS_KEY_2]) if MOVIODDS_KEY_2 else MoviOdds([])
     historico_anterior = HistoricoSportsAPI365(SPORTSAPI365_KEY, DATA_DIR)
     finished = CacheSet(FINISHED_FILE)
     sinais = CacheSet(ENVIADOS_FILE)
@@ -3795,7 +4512,8 @@ def main():
 
     if not tg.send(
         "🟢 <b>Filtro Blindado v5 iniciado</b>\n"
-        "Somente <b>Czech Liga Pro</b>\n" + HORARIOS_TXT +
+        "🏓 <b>Czech Liga Pro</b> (MOVIODDS_KEY)\n" + HORARIOS_TXT +
+        f"\n🏀 <b>Basquete NBA & Europa</b>: {'ATIVO (MOVIODDS_KEY_2)' if MOVIODDS_KEY_2 else 'inativo (sem MOVIODDS_KEY_2)'}\n" +
         f"\n📊 Resumo: 22:30 · Grupo: <code>{esc(GROUP_ID)}</code>", chat_id=CHAT_ID
     ):
         print("Falha Telegram. Verifique TELEGRAM_TOKEN e TELEGRAM_CHAT_ID.")
@@ -3814,6 +4532,8 @@ def main():
     odds_cache = CacheOdds(persistir=True)
     resultados_cache = CacheOdds()
     forma = FormaDia()
+    hist_basket = HistoricoBasquete()
+    basket_mgr = GerenciadorBasquete(moviodds_basket, hist_basket)
 
     while True:
         try:
@@ -3831,7 +4551,8 @@ def main():
                          f"de={(_m.get('from') or {}).get('id')} texto={(_m.get('text') or '')[:40]!r}"
                          + (" (my_chat_member)" if "my_chat_member" in u else ""))
                 try:
-                    tratar_update(u, tg, hist, apostas, conversa)
+                    tratar_update(u, tg, hist, apostas, conversa,
+                                  forma=forma, hist_b=hist_basket, hist_365=historico_anterior)
                 except Exception as e:
                     log.error(f"Update: {e}")
 
@@ -3877,11 +4598,20 @@ def main():
                 vivos_terminados = [Resultado(m.player1, m.player2, m.score1, m.score2, None, "live")
                                     for m in matches if m.finished]
 
+            # Basquete (NBA + Ligas Europeias via MOVIODDS_KEY_2 + Gemini Search)
+            basket_mgr.atualizar_odds_se_devido(agora_local, agora_ts)
+            pend_basket = any(_eh_aposta_basquete(a) for a in apostas.pendentes())
+            basket_mgr.atualizar_resultados_se_devido(agora_local, agora_ts, pend_basket)
+            basket_mgr.processar_entradas(agora_local, tg, apostas, livro)
+
             # GREEN / RED das entradas pendentes (reaproveita forma já carregada sem gastar chamadas extras)
             if apostas.pendentes():
                 res_forma = _resultados_da_forma(forma)
                 if res_forma:
                     resolver_apostas(apostas, res_forma)
+                res_basket = basket_mgr.resultados_para_liquidacao()
+                if res_basket:
+                    resolver_apostas(apostas, res_basket)
             if vivos_terminados and apostas.pendentes():
                 resolver_apostas(apostas, vivos_terminados)
             pend = [a for a in apostas.pendentes() if agora_cet() >= _ref(a) + timedelta(minutes=15)]
