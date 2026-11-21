@@ -2661,8 +2661,7 @@ def fmt_placar(st: dict) -> str:
 def notificar_resultados(apostas: Apostas, tg: "Telegram") -> int:
     """Envia ao grupo o GREEN/RED/anulada de cada entrada resolvida ainda não avisada."""
     n = 0
-for a in apostas.itens:
-for a in apostas.itens:
+    for a in apostas.itens:
         if a.get("notificado") or a.get("status") not in ("green", "red", "void"):
             continue
         hoje = estatisticas(apostas.periodo(agora_cet().strftime("%Y-%m-%d"), agora_cet().strftime("%Y-%m-%d")))
