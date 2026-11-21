@@ -2606,29 +2606,38 @@ def _ref(a: dict) -> datetime:
     return datetime.fromisoformat(a["kickoff"] or a["enviado"])
 
 def resolver_apostas(apostas: Apostas, resultados: List[Resultado], agora: Optional[datetime] = None) -> int:
-    """Marca green/red/anulada nas entradas pendentes. Resultado com kickoff=None = jogo
-    terminado visto na página ao vivo (aceito se a entrada é das últimas 2 h)."""
+    """Marca green/red/anulada nas entradas pendentes buscando o resultado real."""
     agora = agora or agora_cet()
     n = 0
     for a in apostas.pendentes():
         ref = _ref(a)
         achado = None
         for r in resultados:
-            if not ((mesmo_jogador(r.home, a["home"]) and mesmo_jogador(r.away, a["away"])) or
-                    (mesmo_jogador(r.home, a["away"]) and mesmo_jogador(r.away, a["home"]))):
+            mesmo_sentido = mesmo_jogador(r.home, a["home"]) and mesmo_jogador(r.away, a["away"])
+            invertido = mesmo_jogador(r.home, a["away"]) and mesmo_jogador(r.away, a["home"])
+            if not (mesmo_sentido or invertido):
                 continue
-            if max(r.sets_home, r.sets_away) < 3:
+
+            # Aceita placar fechado em 3 sets (padrão MD5) ou partida encerrada/retirada com sets válidos
+            sets_validos = max(r.sets_home, r.sets_away) >= 3 or (
+                (r.sets_home + r.sets_away) >= 3 and r.sets_home != r.sets_away
+            )
+            if not sets_validos:
                 continue
+
             if r.kickoff is not None:
-                if a["kickoff"]:
-                    if abs((r.kickoff - ref).total_seconds()) > 20 * 60:
+                if a.get("kickoff"):
+                    # Tolerância ampliada para atrasos na grade da Liga Pro (até 50 min)
+                    if abs((r.kickoff - ref).total_seconds()) > 50 * 60:
                         continue
-                elif not (ref - timedelta(minutes=70) <= r.kickoff <= ref + timedelta(minutes=10)):
+                elif not (ref - timedelta(minutes=90) <= r.kickoff <= ref + timedelta(minutes=30)):
                     continue
-            elif not (timedelta(0) <= agora - ref <= timedelta(hours=2)):
+            elif not (timedelta(0) <= agora - ref <= timedelta(hours=3)):
                 continue
+
             achado = r
             break
+
         if achado:
             if mesmo_jogador(achado.home, a["pick"]):
                 sp, so = achado.sets_home, achado.sets_away
@@ -2637,11 +2646,14 @@ def resolver_apostas(apostas: Apostas, resultados: List[Resultado], agora: Optio
             a["status"] = "green" if sp > so else "red"
             a["placar"] = f"{achado.home} {achado.sets_home}-{achado.sets_away} {achado.away}"
             a["resolvido"] = agora.isoformat(timespec="seconds")
+            log.info("[RESOLVIDO] %s -> %s (%s)", a.get("pick"), a["status"].upper(), a["placar"])
             n += 1
         elif agora - ref > timedelta(hours=ANULAR_APOS_H):
             a["status"] = "anulada"
             a["resolvido"] = agora.isoformat(timespec="seconds")
+            log.info("[ANULADA] %s (tempo limite excedido)", a.get("pick"))
             n += 1
+
     if n:
         apostas.save()
     return n
