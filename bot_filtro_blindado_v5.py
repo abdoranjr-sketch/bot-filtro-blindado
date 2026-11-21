@@ -2662,7 +2662,15 @@ def notificar_resultados(apostas: Apostas, tg: "Telegram") -> int:
     """Envia ao grupo o GREEN/RED/anulada de cada entrada resolvida ainda não avisada."""
     n = 0
     for a in apostas.itens:
-      if a["status"] in ("green", "red"):
+for a in apostas.itens:
+        if a.get("notificado") or a.get("status") not in ("green", "red", "void"):
+            continue
+        hoje = estatisticas(apostas.periodo(agora_cet().strftime("%Y-%m-%d"), agora_cet().strftime("%Y-%m-%d")))
+        conf = f"🏓 {nome_exibicao(a['home'])} vs {nome_exibicao(a['away'])}\n👑 Alvo: <b>{nome_exibicao(a['pick'])}</b> @ <code>{a['odd']:.2f}</code>"
+        if a["status"] in ("green", "red"):
+            cab = "✅🔥 <b>GREEN CONFIRMADO!</b>" if a["status"] == "green" else "❌🛡️ <b>RED NO JOGO</b>"
+            corpo = f"{conf}\n📊 Placar: <b>{a['placar']}</b>"
+            texto = f"{cab}\n\n{corpo}\n\n📅 Hoje: <b>{fmt_placar(hoje)}</b>"
             ctx_res = (
                 f"Deu GREEN em {a['pick']} ({a['placar']})! Placar hoje: {fmt_placar(hoje)}. Comemore com emojis de lucro e fogo."
                 if a["status"] == "green" else
@@ -2670,17 +2678,15 @@ def notificar_resultados(apostas: Apostas, tg: "Telegram") -> int:
             )
             texto += "\n\n💬 <i>" + _html(frase_dinamica_gemini(ctx_res, "🧠🛡️ " + frase_motivacional() + " 🏓🔥")) + "</i>"
         else:
-            cab = "⚪ 𝗘𝗻𝘁𝗿𝗮𝗱𝗮 𝗮𝗻𝘂𝗹𝗮𝗱𝗮"
+            cab = "⚪ <b>Entrada anulada</b>"
             corpo = f"{conf}\nResultado não encontrado — não conta no placar."
-        texto = f"{cab}\n\n{corpo}\n\n📊 𝗛𝗼𝗷𝗲: <b>{fmt_placar(hoje)}</b>"
-        if a["status"] == "red":
-            texto += "\n\n💬 " + frase_motivacional()
+            texto = f"{cab}\n\n{corpo}\n\n📅 Hoje: <b>{fmt_placar(hoje)}</b>"
         if tg.send(texto):
             a["notificado"] = True
             apostas.save()
             n += 1
         else:
-            break   # tenta de novo no próximo ciclo
+            break  # tenta de novo no próximo ciclo
     return n
 
 # ══════════════════════════════════════════════════════════════════════════════
