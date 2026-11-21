@@ -36,13 +36,13 @@ MoviOdds (odds + resultados) — 144 consultas/dia na grade (4.464 em 31 dias, a
   consulta imediata (no máximo uma por dia, além da grade: o teste aceita ≤161).
 
 Interativo (v5) — tudo vai para o GRUPO (TELEGRAM_GROUP_ID):
-  • GREEN ✅ / RED ❌ de cada  assim que o jogo termina + placar do dia
+- GREEN ✅ / RED ❌ de cada  assim que o jogo termina + placar do dia
     ( sem resultado após 3 h = anulada, não conta)
-  • Resumo do dia às 22:30 (por rodada + acumulado do mês) com aviso +18
-  • Resumo das s às 00:05 Europe/Prague (dia anterior, stake 1 un)
-  • Saudações 07:50 (bom dia), 12:40 (boa tarde), 22:35 (boa noite) com frase motivacional
-  • Responde bom dia/boa tarde/boa noite/oi/obrigado e menções ao bot (com limite por pessoa)
-  • Comandos de todos: /placar /semana /mes /s /ajuda /id
+- Resumo do dia às 22:30 (por rodada + acumulado do mês) com aviso +18
+- Resumo das s às 00:05 Europe/Prague (dia anterior, stake 1 un)
+- Saudações 07:50 (bom dia), 12:40 (boa tarde), 22:35 (boa noite) com frase motivacional
+- Responde bom dia/boa tarde/boa noite/oi/obrigado e menções ao bot (com limite por pessoa)
+- Comandos de todos: /placar /semana /mes /s /ajuda /id
     Comandos de admin (só o dono, TELEGRAM_OWNER_ID ou TELEGRAM_CHAT_ID):
     /status /lista /zerar /limpo /desgaste /derrota
   Para ler mensagens normais do grupo: desative o "Group Privacy" no BotFather
@@ -723,6 +723,11 @@ def _normalizar_gravado(j: dict) -> Optional[dict]:
     novo["quando"] = fim.isoformat()
     novo["fim_estimado"] = fim_estimado
     novo["inicio_estimado"] = inicio_estimado
+    if j.get("total_pontos") is not None:
+        try:
+            novo["total_pontos"] = int(j["total_pontos"])
+        except (TypeError, ValueError):
+            pass
     return novo
 
 class FormaDia:
@@ -807,6 +812,7 @@ class FormaDia:
                 "away": j.get("away") or "",
                 "sets_home": j.get("sets_home"),
                 "sets_away": j.get("sets_away"),
+                "total_pontos": j.get("total_pontos"),
                 "inicio": j.get("inicio"),
                 "fim": j.get("fim") or j.get("quando"),
                 "quando": j.get("quando"),
@@ -842,6 +848,7 @@ class FormaDia:
                 "id": r.match_id or f"{r.home}|{r.away}|{quando.isoformat()}",
                 "home": r.home, "away": r.away,
                 "sets_home": r.sets_home, "sets_away": r.sets_away,
+                "total_pontos": r.total_pontos,
                 "inicio": quando, "fim_estimado": True,
                 "league": "Czech Liga Pro",
             }, agora)
@@ -879,6 +886,7 @@ class FormaDia:
                 "resultado": classificar(sf, sc),
                 "sets_favor": sf,
                 "sets_contra": sc,
+                "total_pontos": norm.get("total_pontos"),
                 "inicio": inicio or fim,
                 "fim": fim,
                 "adversario": adv,
@@ -932,6 +940,9 @@ class OddsMatch:
     in_play: bool
     score: Optional[str] = None
     kickoff: Optional[datetime] = None   # horário de início (CET), se a API informar
+    total_linha: Optional[float] = None
+    odd_over: Optional[float] = None
+    odd_under: Optional[float] = None
 
     # compatibilidade com avaliar()
     @property
@@ -951,6 +962,7 @@ def _odds_para_dict(o: "OddsMatch") -> dict:
         "home": o.home, "away": o.away,
         "odd_home": o.odd_home, "odd_away": o.odd_away,
         "in_play": bool(o.in_play), "score": o.score, "kickoff": ko,
+        "total_linha": o.total_linha, "odd_over": o.odd_over, "odd_under": o.odd_under,
     }
 
 def _odds_de_dict(d: dict) -> "OddsMatch":
@@ -959,6 +971,9 @@ def _odds_de_dict(d: dict) -> "OddsMatch":
         d.get("odd_home"), d.get("odd_away"),
         bool(d.get("in_play")), d.get("score"),
         _parse_kickoff(d.get("kickoff")),
+        total_linha=d.get("total_linha"),
+        odd_over=d.get("odd_over"),
+        odd_under=d.get("odd_under"),
     )
 
 def _sets_de_placar(texto: str) -> Optional[Tuple[int, int]]:
@@ -993,6 +1008,61 @@ def _parse_kickoff(v) -> Optional[datetime]:
         return dt.astimezone(TZ)
     except Exception:
         return None
+
+def _extrair_total_pontos_quote(q: dict) -> Optional[Tuple[float, str, float]]:
+    """Extrai (linha, 'Over'|'Under', odd) de quotes de pontos totais da partida."""
+    odd = q.get("odds_dec")
+    if not odd or not (float(odd) > 1):
+        return None
+    grupo = (q.get("group_name") or "").strip().lower()
+    if any(k in grupo for k in ("set 1", "1st set", "set 2", "2nd set", "set 3", "handicap", "spread")):
+        return None
+    if not any(k in grupo for k in ("total", "over/under", "points", "pontos", "game")):
+        return None
+    side_raw = (q.get("side") or q.get("label") or "").strip().lower()
+    linha_raw = str(q.get("line") or "").strip().lower()
+    lado = None
+    if side_raw.startswith("over") or side_raw.startswith("mais") or "over" in side_raw:
+        lado = "Over"
+    elif side_raw.startswith("under") or side_raw.startswith("menos") or "under" in side_raw:
+        lado = "Under"
+    if not lado:
+        return None
+    m_linha = re.search(r"(\d+(?:\.\d+)?)", linha_raw) or re.search(r"(\d+(?:\.\d+)?)", side_raw)
+    if not m_linha:
+        return None
+    linha = float(m_linha.group(1))
+    if not (55.0 <= linha <= 115.5):
+        return None
+    return linha, lado, float(odd)
+
+def _somar_pontos_resultado(m: dict) -> Optional[int]:
+    """Soma os pontos reais dos sets a partir dos campos do MoviOdds / placar parcial."""
+    for chave in ("period_scores", "periods", "sets_scores", "scores"):
+        val = m.get(chave)
+        if isinstance(val, list) and val:
+            total = 0
+            achou = False
+            for item in val:
+                if isinstance(item, dict):
+                    p1 = item.get("home") or item.get("p1") or item.get("score_home")
+                    p2 = item.get("away") or item.get("p2") or item.get("score_away")
+                    if p1 is not None and p2 is not None:
+                        total += int(p1) + int(p2)
+                        achou = True
+                elif isinstance(item, str):
+                    pm = re.match(r"^\s*(\d+)\s*[-:]\s*(\d+)\s*$", item)
+                    if pm:
+                        total += int(pm.group(1)) + int(pm.group(2))
+                        achou = True
+            if achou and total > 0:
+                return total
+    txt = " ".join(str(m.get(k) or "") for k in ("final_score", "score", "note", "comment", "info"))
+    pares = re.findall(r"\b(\d{1,2})\s*[-:]\s*(\d{1,2})\b", txt)
+    sets_pares = [(int(a), int(b)) for a, b in pares if max(int(a), int(b)) >= 11]
+    if len(sets_pares) >= 3:
+        return sum(a + b for a, b in sets_pares)
+    return None
 
 class MoviOdds:
     """Odds bet365. keys é [MOVIODDS_KEY, MOVIODDS_KEY_2]; vazias são ignoradas.
@@ -1107,14 +1177,19 @@ class MoviOdds:
                 continue
             home, away = m.get("home", ""), m.get("away", "")
             odd_h = odd_a = None
+            totais_por_linha: Dict[float, Dict[str, float]] = {}
             for q in m.get("quotes") or []:
-                if not _e_mercado_vencedor(q):
+                if _e_mercado_vencedor(q):
+                    side = (q.get("side") or "").lower()
+                    if side == home.lower() or (side and home.lower() in side):
+                        odd_h = float(q["odds_dec"])
+                    elif side == away.lower() or (side and away.lower() in side):
+                        odd_a = float(q["odds_dec"])
                     continue
-                side = (q.get("side") or "").lower()
-                if side == home.lower() or (side and home.lower() in side):
-                    odd_h = float(q["odds_dec"])
-                elif side == away.lower() or (side and away.lower() in side):
-                    odd_a = float(q["odds_dec"])
+                tp = _extrair_total_pontos_quote(q)
+                if tp:
+                    linha, lado, odd_tp = tp
+                    totais_por_linha.setdefault(linha, {})[lado] = odd_tp
             if odd_h is None or odd_a is None:
                 for q in m.get("quotes") or []:
                     if not _e_mercado_vencedor(q):
@@ -1124,8 +1199,22 @@ class MoviOdds:
                         odd_h = float(q["odds_dec"])
                     elif away.lower() in label:
                         odd_a = float(q["odds_dec"])
-            out.append(OddsMatch(home, away, odd_h, odd_a, bool(m.get("in_play")), m.get("score"),
-                                 _parse_kickoff(m.get("kickoff_utc"))))
+            total_linha = odd_over = odd_under = None
+            melhor_diff = 999.0
+            for linha, lados in totais_por_linha.items():
+                ov, un = lados.get("Over"), lados.get("Under")
+                if ov and un:
+                    diff = abs(ov - un)
+                    if diff < melhor_diff:
+                        melhor_diff = diff
+                        total_linha, odd_over, odd_under = linha, ov, un
+                elif total_linha is None and (ov or un):
+                    total_linha, odd_over, odd_under = linha, ov, un
+            out.append(OddsMatch(
+                home, away, odd_h, odd_a, bool(m.get("in_play")), m.get("score"),
+                _parse_kickoff(m.get("kickoff_utc")),
+                total_linha=total_linha, odd_over=odd_over, odd_under=odd_under,
+            ))
         return out
 
     @staticmethod
@@ -1150,7 +1239,6 @@ class MoviOdds:
             if fim is None and inicio is None:
                 continue
             if fim is None:
-                # A API não mandou o fim: início + duração estimada pelo número de sets.
                 fim = estimar_fim(inicio, sh, sa)
                 fim_estimado = True
             elif inicio is None:
@@ -1162,6 +1250,7 @@ class MoviOdds:
                 "away": m.get("away") or "",
                 "sets_home": sh,
                 "sets_away": sa,
+                "total_pontos": _somar_pontos_resultado(m),
                 "quando": fim,
                 "inicio": inicio,
                 "fim": fim,
@@ -1214,7 +1303,12 @@ def com_odds(fixtures: List[OddsMatch], odds_list: List[OddsMatch]) -> List[Odds
                 oh, oa = o.odd_home, o.odd_away
             else:
                 oh, oa = o.odd_away, o.odd_home
-        out.append(OddsMatch(f.home, f.away, oh, oa, f.in_play, f.score, f.kickoff))
+        out.append(OddsMatch(
+            f.home, f.away, oh, oa, f.in_play, f.score, f.kickoff,
+            total_linha=o.total_linha if o else None,
+            odd_over=o.odd_over if o else None,
+            odd_under=o.odd_under if o else None,
+        ))
     return out
 
 def _kickoff_local(dt: Optional[datetime]) -> Optional[datetime]:
@@ -1293,7 +1387,10 @@ def coletar_agenda(jogos: List[OddsMatch], agora: datetime,
         if ko < limite:
             continue
         chave = (chave_par(o.home, o.away), ko.strftime("%Y-%m-%d|%H:%M"))
-        por[chave] = OddsMatch(o.home, o.away, o.odd_home, o.odd_away, bool(o.in_play), o.score, ko)
+        por[chave] = OddsMatch(
+            o.home, o.away, o.odd_home, o.odd_away, bool(o.in_play), o.score, ko,
+            total_linha=o.total_linha, odd_over=o.odd_over, odd_under=o.odd_under,
+        )
     return list(por.values())
 
 def fonte_entrada(fixtures: List[OddsMatch], odds_list: List[OddsMatch]) -> List[OddsMatch]:
@@ -1321,7 +1418,12 @@ def fonte_entrada(fixtures: List[OddsMatch], odds_list: List[OddsMatch]) -> List
                 oh, oa = o.odd_home, o.odd_away
             else:
                 oh, oa = o.odd_away, o.odd_home
-        out.append(OddsMatch(f.home, f.away, oh, oa, False, f.score, ko))
+        out.append(OddsMatch(
+            f.home, f.away, oh, oa, False, f.score, ko,
+            total_linha=o.total_linha if o else None,
+            odd_over=o.odd_over if o else None,
+            odd_under=o.odd_under if o else None,
+        ))
         vistos.add(k)
     for k, o in por_par.items():
         if k not in vistos:
@@ -1402,10 +1504,10 @@ class Resultado:
     sets_away: int
     kickoff: Optional[datetime]
     match_id: str
+    total_pontos: Optional[int] = None
 
 class ScoreMondo:
     URL = "https://scoremondo.com/en/table-tennis/live"
-    # Páginas públicas da liga (robots.txt permite; só /api/ é bloqueado)
     LIGA_URL = "https://scoremondo.com/en/competition/czechia-czech-liga-pro-18275895"
     HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     STOPS = ["TT Star Series", "Masters League", "Setka Cup", "TT Elite", "Next matches", "All of today’s"]
@@ -1429,12 +1531,10 @@ class ScoreMondo:
             return None
 
     def fetch_fixtures(self) -> List[OddsMatch]:
-        """Próximos jogos da Czech Liga Pro (≈ 14 h à frente), com horário. Sem odds."""
         html = self._get(self.LIGA_URL + "/fixtures")
         return self.parse_fixtures(html) if html else []
 
     def fetch_results(self) -> List[Resultado]:
-        """Últimos ~40 resultados da Czech Liga Pro (placar em sets + horário de início)."""
         html = self._get(self.LIGA_URL + "/results")
         return self.parse_results(html) if html else []
 
@@ -1479,12 +1579,10 @@ class ScoreMondo:
         if "Czech Liga Pro" not in text:
             return []
         after = text.split("Czech Liga Pro", 1)[1]
-        # corta no PRIMEIRO marcador encontrado (v3 cortava no primeiro da lista)
         cortes = [after.find(s) for s in self.STOPS if s in after]
         if cortes:
             after = after[:min(cortes)]
         lines = [l.strip() for l in after.split("\n") if l.strip()]
-        # corta também no próximo cabeçalho de liga: País / Liga / nº de jogos / S#
         for k in range(len(lines) - 3):
             if (not re.match(r"^(\d+|S\d+)$", lines[k]) and not re.match(r"^(\d+|S\d+)$", lines[k+1])
                     and re.match(r"^\d+$", lines[k+2]) and re.match(r"^S\d+$", lines[k+3])):
@@ -1542,7 +1640,6 @@ def _no_dia(ref: datetime, hour: int, minute: int) -> datetime:
     return TZ.localize(datetime(local.year, local.month, local.day, hour, minute))
 
 def _janela_r1_inicio(agora: datetime) -> Optional[Tuple[datetime, datetime]]:
-    """Se agora está na janela de gravar a 1ª rodada, devolve hh:00 .. hh:50 desse ciclo."""
     local = agora.astimezone(TZ)
     t = local.time()
     for h1, m1, h2, m2 in JANELAS_R1:
@@ -1551,7 +1648,6 @@ def _janela_r1_inicio(agora: datetime) -> Optional[Tuple[datetime, datetime]]:
     return None
 
 def _janela_r2_inicio(agora: datetime) -> Optional[Tuple[datetime, datetime]]:
-    """Se agora está na 2ª rodada, devolve o intervalo hh+1:00 .. hh+1:50 desse ciclo."""
     local = agora.astimezone(TZ)
     t = local.time()
     for h1, m1, h2, m2 in JANELAS_R2:
@@ -1584,6 +1680,16 @@ def _odd_do_jogador(player: str, o: Optional[OddsMatch]) -> Optional[float]:
         return o.odd_away
     return None
 
+def _odd_da_entrada(alvo: str, o: Optional[OddsMatch]) -> Optional[float]:
+    if not o or not alvo:
+        return None
+    low = alvo.strip().lower()
+    if low.startswith("over"):
+        return o.odd_over
+    if low.startswith("under"):
+        return o.odd_under
+    return _odd_do_jogador(alvo, o)
+
 def classificar(sf: int, sc: int) -> str:
     if sf == 3 and sc <= 1:
         return "limpo"
@@ -1594,7 +1700,6 @@ def classificar(sf: int, sc: int) -> str:
     return "nao"
 
 def _html(nome: str) -> str:
-    """Escapa nome de jogador para o parse_mode HTML do Telegram."""
     return html.escape(" ".join(str(nome or "").split()), quote=False)
 
 def _dia_local(ref: Optional[datetime]) -> str:
@@ -1646,7 +1751,6 @@ def _partida_duplicada(novo: dict, existentes: List[dict]) -> bool:
     return False
 
 def _partidas_historico(entry: Optional[dict]) -> List[dict]:
-    """Jogos do histórico local. Sem fim gravado, estima a partir do início."""
     if not entry:
         return []
     itens = entry.get("jogos") or [entry]
@@ -1680,7 +1784,6 @@ def _partidas_historico(entry: Optional[dict]) -> List[dict]:
 
 def partidas_do_jogador(nome: str, hist: Optional[Historico],
                         forma: Optional[FormaDia]) -> List[dict]:
-    """Forma do MoviOdds primeiro (tem adversário e fim). O histórico só completa."""
     jogos = forma.partidas_de(nome) if forma is not None else []
     entry = hist.get(nome) if hist is not None else None
     for j in _partidas_historico(entry):
@@ -1690,7 +1793,6 @@ def partidas_do_jogador(nome: str, hist: Optional[Historico],
     return jogos
 
 def metricas_forma(nome: str, partidas: List[dict], agora: datetime) -> FormaJogador:
-    """score nos últimos 2–3 jogos de 4 h; jogos_hoje conta os finalizados em 3 h."""
     agora = _kickoff_local(agora)
     limite_4h = agora - timedelta(hours=JANELA_SCORE_H)
     dentro = []
@@ -1749,7 +1851,6 @@ def _mapa_adversarios(partidas: List[dict], agora: datetime) -> Dict[tuple, dict
     return out
 
 def bonus_triangulacao(alvo: FormaJogador, adv: FormaJogador, agora: datetime) -> float:
-    """Adversário comum nas últimas 3 h. +2.0 ou +1.0 por C, sem somar os dois no mesmo C."""
     ma = _mapa_adversarios(alvo.partidas, agora)
     mb = _mapa_adversarios(adv.partidas, agora)
     total = 0.0
@@ -1779,7 +1880,6 @@ def _eh_este_confronto(o: OddsMatch, nome: str, adversario: str, kickoff: dateti
     )
     if not mesmo_par:
         return False
-    # Até 10 min de diferença no mesmo par é o próprio jogo (fontes divergem o apito).
     return abs((_kickoff_local(o.kickoff) - _kickoff_local(kickoff)).total_seconds()) <= 10 * 60
 
 def _sets_partida(p: dict) -> Optional[int]:
@@ -1789,7 +1889,6 @@ def _sets_partida(p: dict) -> Optional[int]:
         return None
 
 def _bloqueia_sets_anteriores(nsets: Optional[int]) -> bool:
-    """rigido: qualquer jogo anterior. sets: só 4 ou 5 sets (sem placar, não bloqueia)."""
     if modo_horario_anterior() != "sets":
         return True
     return nsets in (4, 5)
@@ -1798,12 +1897,6 @@ def jogou_no_horario_anterior(nome: str, kickoff: Optional[datetime],
                               partidas: List[dict],
                               agenda: Optional[List[OddsMatch]] = None,
                               adversario: str = "") -> bool:
-    """True se o jogador começou outro jogo nos 45 min anteriores a este apito.
-
-    Vale o início gravado no resultado e também a grade (odds/fixtures), para
-    o caso em que o jogo anterior ainda não tem placar. Com HORARIO_ANTERIOR=sets,
-    só bloqueia se esse jogo teve 4 ou 5 sets.
-    """
     if kickoff is None or not nome:
         return False
     for p in partidas or []:
@@ -1833,7 +1926,6 @@ def decidir_entrada(a: FormaJogador, b: FormaJogador,
                     agora: datetime,
                     anterior_a: bool = False,
                     anterior_b: bool = False) -> Decisao:
-    """Pseudocódigo do filtro. Empate de score_forma escolhe o jogador B."""
     if a.jogos_hoje < 1 or b.jogos_hoje < 1:
         return Decisao("indefinido", ["PASSAR (Sem dados do dia)"])
     if a.score_forma > b.score_forma:
@@ -1861,6 +1953,65 @@ def decidir_entrada(a: FormaJogador, b: FormaJogador,
         )
     return Decisao("bloqueado", ["PASSAR (Desnível insuficiente)"])
 
+def _stats_pontos_jogador(partidas: List[dict], agora: datetime) -> Tuple[int, float]:
+    agora = _kickoff_local(agora)
+    limite = agora - timedelta(hours=JANELA_SCORE_H)
+    recentes = [
+        p for p in (partidas or [])
+        if p.get("fim") and limite <= _kickoff_local(p["fim"]) <= agora
+    ][-MAX_JOGOS_SCORE:]
+    if not recentes:
+        return 0, 0.0
+    media_sets = sum(int(p["sets_favor"]) + int(p["sets_contra"]) for p in recentes) / len(recentes)
+    return len(recentes), media_sets
+
+def decidir_entrada_pontos(a: FormaJogador, b: FormaJogador,
+                           om: Optional[OddsMatch],
+                           agora: datetime,
+                           anterior_a: bool = False,
+                           anterior_b: bool = False) -> Decisao:
+    if om is None or om.total_linha is None:
+        return Decisao("bloqueado", ["PASSAR Pontos (Sem linha de pontos)"])
+    if a.jogos_hoje < 1 or b.jogos_hoje < 1:
+        return Decisao("indefinido", ["PASSAR Pontos (Sem dados do dia)"])
+
+    na, sets_a = _stats_pontos_jogador(a.partidas, agora)
+    nb, sets_b = _stats_pontos_jogador(b.partidas, agora)
+    if na < 2 or nb < 2:
+        return Decisao("bloqueado", ["PASSAR Pontos (Amostra curta de jogos)"])
+
+    media_sets_par = (sets_a + sets_b) / 2.0
+    diff_forma = abs(a.score_forma - b.score_forma)
+
+    if (
+        om.odd_over and ODD_MIN_ALVO <= om.odd_over <= ODD_MAX_ALVO
+        and media_sets_par >= 4.0
+        and diff_forma <= 2.5
+        and not (anterior_a and anterior_b)
+    ):
+        alvo_pts = f"Over {om.total_linha:g}"
+        gap_pts = round((media_sets_par - 3.5) * 3.0, 1)
+        motivos = [
+            f"✓ Mercado Pontos: <b>{alvo_pts} pts</b> (odd {om.odd_over:.2f})",
+            f"✓ Média sets recentes: {sets_a:.1f} vs {sets_b:.1f} (Δ forma {diff_forma:.1f})",
+        ]
+        return Decisao("verde", motivos, alvo_pts, gap_pts, om.odd_over, a.score_forma, b.score_forma, 0.0)
+
+    if (
+        om.odd_under and ODD_MIN_ALVO <= om.odd_under <= ODD_MAX_ALVO
+        and media_sets_par <= 3.5
+        and diff_forma >= GAP_MIN
+    ):
+        alvo_pts = f"Under {om.total_linha:g}"
+        gap_pts = round(diff_forma, 1)
+        motivos = [
+            f"✓ Mercado Pontos: <b>{alvo_pts} pts</b> (odd {om.odd_under:.2f})",
+            f"✓ Domínio seco esperado: média {sets_a:.1f}/{sets_b:.1f} sets (Δ forma {diff_forma:.1f})",
+        ]
+        return Decisao("verde", motivos, alvo_pts, gap_pts, om.odd_under, a.score_forma, b.score_forma, 0.0)
+
+    return Decisao("bloqueado", ["PASSAR Pontos (Sem vantagem clara na linha)"])
+
 def _odds_do_par(player1: str, player2: str, odds_map: Dict[str, OddsMatch]):
     om = achar_odds(player1, player2, [o for o in odds_map.values() if not o.in_play])
     if om and mesmo_jogador(om.home, player1):
@@ -1887,11 +2038,32 @@ def analisar_confronto(player1: str, player2: str, hist: Historico,
     ant2 = jogou_no_horario_anterior(player2, kickoff, p2, agenda, player1)
     return decidir_entrada(a, b, odd1, odd2, agora, ant1, ant2)
 
+def analisar_entradas_confronto(player1: str, player2: str, hist: Historico,
+                                odds_map: Dict[str, OddsMatch],
+                                kickoff: Optional[datetime] = None,
+                                forma: Optional[FormaDia] = None,
+                                agenda: Optional[List[OddsMatch]] = None,
+                                agora: Optional[datetime] = None) -> List[Decisao]:
+    agora = agora or agora_cet()
+    if agenda is None:
+        agenda = list(odds_map.values()) if odds_map else []
+    p1 = partidas_do_jogador(player1, hist, forma)
+    p2 = partidas_do_jogador(player2, hist, forma)
+    a = metricas_forma(player1, p1, agora)
+    b = metricas_forma(player2, p2, agora)
+    odd1, odd2 = _odds_do_par(player1, player2, odds_map or {})
+    ant1 = jogou_no_horario_anterior(player1, kickoff, p1, agenda, player2)
+    ant2 = jogou_no_horario_anterior(player2, kickoff, p2, agenda, player1)
+
+    d_vencedor = decidir_entrada(a, b, odd1, odd2, agora, ant1, ant2)
+    om = achar_odds(player1, player2, [o for o in (odds_map or {}).values() if not o.in_play])
+    d_pontos = decidir_entrada_pontos(a, b, om, agora, ant1, ant2)
+    return [d_vencedor, d_pontos]
+
 def avaliar(m, hist: Historico, odds_map: Dict[str, OddsMatch],
             forma: Optional[FormaDia] = None,
             agenda: Optional[List[OddsMatch]] = None,
             agora: Optional[datetime] = None) -> Tuple[str, List[str], Optional[str]]:
-    """Aplica as regras a qualquer objeto com .player1 e .player2 (LiveMatch ou OddsMatch)."""
     return avaliar_par(m.player1, m.player2, hist, odds_map,
                        kickoff=getattr(m, "kickoff", None), forma=forma,
                        agenda=agenda, agora=agora)
@@ -1902,7 +2074,6 @@ def avaliar_par(player1: str, player2: str, hist: Historico,
                 forma: Optional[FormaDia] = None,
                 agenda: Optional[List[OddsMatch]] = None,
                 agora: Optional[datetime] = None) -> Tuple[str, List[str], Optional[str]]:
-    """Filtro por score_forma. O alvo é quem tem a melhor forma, não a odd menor."""
     d = analisar_confronto(player1, player2, hist, odds_map, kickoff, forma, agenda, agora)
     return d.status, d.motivos, d.alvo
 
@@ -1913,7 +2084,6 @@ def montar_odds_map(odds_list: List[OddsMatch]) -> Dict[str, OddsMatch]:
 # ENTRADA hh:55 (pré-jogo, 2ª rodada)
 # ══════════════════════════════════════════════════════════════════════════════
 
-# sendMessage do Telegram recusa texto acima de 4096 unidades UTF-16.
 TG_LIMITE = 4096
 
 def _tamanho_tg(texto: str) -> int:
@@ -1944,7 +2114,6 @@ def _montar_miolo(blocos: List[str], total: int, aviso: str, linhas: List[str], 
 
 def _max_linhas(blocos: List[str], total: int, aviso: str, linhas: List[str],
                 cab: str, rodape: str, limite: int) -> int:
-    """Quantas linhas de fora cabem. -1 se nem o aviso de corte cabe."""
     def montado(qtd: int) -> str:
         return _montar_miolo(blocos, total, aviso, linhas[:qtd], len(linhas) - qtd, cab, rodape)
 
@@ -1995,7 +2164,6 @@ def _cortar_para(texto: str, limite: int) -> str:
     return base + nota
 
 def _partir_telegram(texto: str, limite: int = TG_LIMITE) -> List[str]:
-    """Divide em envios de no máximo `limite` unidades UTF-16, sem cortar no meio de uma tag."""
     if not texto:
         return []
     if _tamanho_tg(texto) <= limite:
@@ -2025,7 +2193,6 @@ def _garantir_limite(texto: str, limite: int = TG_LIMITE) -> List[str]:
 
 def _empacotar_entrada(cab: str, blocos: List[str], aviso: str, linhas: List[str],
                        rodape: str, limite: int = TG_LIMITE) -> List[str]:
-    """Uma mensagem se couber. Senão corta a lista de fora; se os verdes não cabem, divide."""
     total = len(blocos)
     grupos: List[List[str]] = []
     atual: List[str] = []
@@ -2081,7 +2248,6 @@ GEMINI_TIMEOUT_S = 8
 GEMINI_MAX_CHARS = 200
 
 def _modelos_gemini() -> Tuple[str, ...]:
-    """Principal em GEMINI_MODEL (padrão gemini-2.5-flash) e, se for outro, o fallback."""
     principal = os.environ.get("GEMINI_MODEL", "").strip() or GEMINI_MODELO_PADRAO
     if principal == GEMINI_MODELO_FALLBACK:
         return (principal,)
@@ -2115,10 +2281,6 @@ def _chamar_gemini(modelo: str, chave: str, prompt: str, timeout: float) -> str:
     return "".join(p.get("text") or "" for p in parts if isinstance(p, dict))
 
 def consultar_gemini(prompt: str) -> str:
-    """Uma chamada por bloco. Sem chave, timeout ou erro: texto vazio, sem exceção.
-
-    A chave não entra no log. O tempo total das tentativas fica em 8 s.
-    """
     chave = _chave_gemini()
     if not chave or not (prompt or "").strip():
         return ""
@@ -2167,7 +2329,6 @@ def ler_licoes() -> str:
         return ""
 
 def historico_alvo_bot(alvo: str) -> str:
-    """Conta quantos GREEN/RED este jogador já deu nas entradas do bot."""
     _campos, linhas = _ler_auditoria()
     g = r = 0
     for row in linhas:
@@ -2184,7 +2345,6 @@ def historico_alvo_bot(alvo: str) -> str:
     return f"{g} GREEN / {r} RED no bot"
 
 def atualizar_licoes_diarias(tg: "Telegram") -> bool:
-    """Lê os últimos 40 resultados da auditoria e pede ao Gemini 5 lições práticas."""
     if not _chave_gemini():
         return False
     _campos, linhas = _ler_auditoria()
@@ -2274,7 +2434,6 @@ def _partir_vereditos(texto: str, n: int) -> List[str]:
 
 def vereditos_gemini(itens: list, hist: Historico, forma: Optional[FormaDia],
                      agenda: Optional[List[OddsMatch]]) -> List[str]:
-    """No máximo uma chamada por bloco. Lista vazia se não houver o que dizer."""
     if not itens or not _chave_gemini():
         return []
     try:
@@ -2283,6 +2442,14 @@ def vereditos_gemini(itens: list, hist: Historico, forma: Optional[FormaDia],
         log.info("[GEMINI] sem análise (%s)", type(exc).__name__)
         return []
     return _partir_vereditos(texto, len(itens))
+
+def _formatar_alvo_entrada(alvo: str) -> tuple[str, bool]:
+    txt = (alvo or "").strip()
+    low = txt.lower()
+    if low.startswith(("over ", "under ", "mais de ", "menos de ", "pts ", "pontos ")):
+        rotulo = txt if "pts" in low or "pontos" in low else f"{txt} pts"
+        return f"📊 {rotulo}", True
+    return nome_exibicao(txt), False
 
 def _texto_entrada(hora: str, home: str, away: str, alvo: str, odd: Optional[float],
                    veredito: str = "") -> str:
@@ -2299,16 +2466,22 @@ def _texto_entrada(hora: str, home: str, away: str, alvo: str, odd: Optional[flo
     ]
     stake = "1.0 un 🔥" if "confiança: alta" in veredito.lower() else "0.5 un 🛡️"
     bloco_gemini = f"🤖 𝗚𝗲𝗺𝗶𝗻𝗶: <i>{_html(veredito)}</i>\n" if veredito else ""
+    alvo_txt, eh_pontos = _formatar_alvo_entrada(alvo)
+    ctx_frase = (
+        f"Entrada em pontos ({alvo_txt}) em {nome_exibicao(home)} vs {nome_exibicao(away)} @ {odd_txt}. {veredito}"
+        if eh_pontos else
+        f"Entrada em {alvo_txt} @ {odd_txt}. {veredito}"
+    )
     return (
         f"{random.choice(titulos)}\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"⏰ 𝗛𝗼𝗿𝗮́𝗿𝗶𝗼: <code>{hora}</code>\n"
         f"🏓 𝗝𝗼𝗴𝗼: {_html(nome_exibicao(home))} vs {_html(nome_exibicao(away))}\n"
-        f"👑 𝗔𝗹𝘃𝗼: <b>{_html(nome_exibicao(alvo))}</b>\n"
+        f"👑 𝗔𝗹𝘃𝗼: <b>{_html(alvo_txt)}</b>\n"
         f"💰 𝗢𝗱𝗱: <code>{odd_txt}</code>  |  🎯 𝗦𝘁𝗮𝗸𝗲: <code>{stake}</code>\n"
         f"{bloco_gemini}"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"💬 <i>{_html(frase_dinamica_gemini(f'Entrada em {nome_exibicao(alvo)} @ {odd_txt}. {veredito}', random.choice(fechamentos)))}</i>"
+        f"💬 <i>{_html(frase_dinamica_gemini(ctx_frase, random.choice(fechamentos)))}</i>"
     )
 
 def _texto_sem_entrada(hora: str) -> str:
@@ -2320,7 +2493,6 @@ def _texto_sem_entrada(hora: str) -> str:
     return random.choice(frases)
 
 def _linhas_historico(hist, home: str, away: str, universo: List[str]) -> List[str]:
-    """Forma 7d e H2H 14d lidos do cache. Sem chave, sem casamento único ou sem jogos: nada."""
     if hist is None or not getattr(hist, "ativo", False):
         return []
     try:
@@ -2346,11 +2518,6 @@ def montar_mensagem_entrada(slot_key: str, confrontos: List[OddsMatch], hist: Hi
                             historico_anterior: Optional[HistoricoSportsAPI365] = None,
                             agenda: Optional[List[OddsMatch]] = None,
                             ) -> Tuple[List[str], list, List[OddsMatch]]:
-    """Retorna (textos, verdes, avaliados_definitivos). Cada texto cabe no Telegram.
-
-    O Telegram leva só a entrada (ou "HH:MM — Sem entrada"). Score, gap, bônus
-    e Histórico/H2H vão para o log. Verdes saem ordenados pelo maior gap.
-    """
     odds_map = montar_odds_map(odds_list)
     grade = odds_list if agenda is None else agenda
     hora = _alvo_bloco(slot_key).split("|", 1)[1]
@@ -2362,11 +2529,11 @@ def montar_mensagem_entrada(slot_key: str, confrontos: List[OddsMatch], hist: Hi
     universo = [n for o in confrontos for n in (o.home, o.away)]
     avaliados = []
     for o in confrontos:
-        d = analisar_confronto(o.home, o.away, hist, odds_map, o.kickoff, forma, grade)
         extras = _linhas_historico(historico_anterior, o.home, o.away, universo)
-        avaliados.append((o, d, extras))
-        log.info("[ENTRADA %s] %s x %s | %s | %s", rotulo, o.home, o.away, d.status,
-                 " ; ".join(d.motivos) or d.status)
+        for d in analisar_entradas_confronto(o.home, o.away, hist, odds_map, o.kickoff, forma, grade):
+            avaliados.append((o, d, extras))
+            log.info("[ENTRADA %s] %s x %s | %s | %s", rotulo, o.home, o.away, d.status,
+                     " ; ".join(d.motivos) or d.status)
         if extras:
             log.info("[ENTRADA %s] contexto | %s", rotulo, " ; ".join(extras))
     verdes_raw = [item for item in avaliados if item[1].status == "verde"]
@@ -2374,7 +2541,7 @@ def montar_mensagem_entrada(slot_key: str, confrontos: List[OddsMatch], hist: Hi
 
     verdes, definitivos = [], []
     for o, d, _extras in avaliados:
-        if d.status in ("verde", "bloqueado"):
+        if d.status in ("verde", "bloqueado") and o not in definitivos:
             definitivos.append(o)
     blocos = []
     vereditos = vereditos_gemini(verdes_raw, hist, forma, agenda if agenda is not None else odds_list)
@@ -2383,7 +2550,7 @@ def montar_mensagem_entrada(slot_key: str, confrontos: List[OddsMatch], hist: Hi
         if "confiança: baixa" in veredito.lower():
             log.info("[GEMINI VETO] %s x %s bloqueado | %s", o.home, o.away, veredito)
             continue
-        verdes.append((o, d.alvo, d.gap, veredito))
+        verdes.append((o, d.alvo, d.gap, veredito, d.odd))
         blocos.append(_texto_entrada(
             _hora_jogo(o), o.home, o.away, d.alvo or "", d.odd, veredito))
     if not blocos:
@@ -2424,19 +2591,21 @@ def processar_entrada(slot_key: str, hist: Historico, sinais: CacheSet, entradas
     entradas.add(slot_key)
     bloco_dt = _kickoff_local(confrontos[0].kickoff)
     dia = bloco_dt.strftime("%Y-%m-%d")
-    for o in definitivos:   # verdes e bloqueados: o ao vivo não reavalia
+    for o in definitivos:
         sinais.add(chave_sinal(o.home, o.away, dia))
     if apostas is not None:
         bloco = f"{bloco_dt.hour:02d}"
         for item in verdes:
             o, fav = item[0], item[1]
-            apostas.add(o.home, o.away, fav, bloco, f"{bloco_dt.minute:02d}", o.kickoff)
+            odd_item = item[4] if len(item) > 4 and item[4] is not None else _odd_da_entrada(fav, o)
+            apostas.add(o.home, o.away, fav, bloco, f"{bloco_dt.minute:02d}", o.kickoff, odd=odd_item)
     if livro is not None:
         for item in verdes:
             o, fav = item[0], item[1]
             gap = item[2] if len(item) > 2 else None
             veredito = item[3] if len(item) > 3 else ""
-            livro.registrar(o.home, o.away, fav, o.kickoff, _odd_do_jogador(fav, o), gap, veredito)
+            odd_item = item[4] if len(item) > 4 and item[4] is not None else _odd_da_entrada(fav, o)
+            livro.registrar(o.home, o.away, fav, o.kickoff, odd_item, gap, veredito)
     return True
 
 def despachar_alerta(agora: datetime, fonte: List[OddsMatch], entradas: CacheSet,
@@ -2447,7 +2616,6 @@ def despachar_alerta(agora: datetime, fonte: List[OddsMatch], entradas: CacheSet
                      agenda: Optional[List[OddsMatch]] = None,
                      livro: Optional["LivroEntradas"] = None,
                      odds_frescas: bool = True) -> bool:
-    """Uma vez por bloco, na janela :25–:29 ou :55–:59. Vale depois de reiniciar."""
     slot = slot_alerta_atual(agora)
     if not slot or entradas.has(slot):
         return False
@@ -2491,14 +2659,12 @@ def processar(matches: List[LiveMatch], hist: Historico, finished: CacheSet,
         if modo == "R2":
             key_s = chave_sinal(m.player1, m.player2, dia)
             if sinais.has(key_s):
-                continue   # o bloco pré-jogo já avaliou este confronto
-            # Só pré-jogo: odd ao vivo significa que o confronto já começou.
+                continue
             if _tem_odd_ao_vivo(m.player1, m.player2, odds_list):
                 continue
             agora = agora_cet()
             pre = achar_odds(m.player1, m.player2, [o for o in odds_list if not o.in_play])
             kickoff = getattr(m, "kickoff", None) or (pre.kickoff if pre else None)
-            # O bloco (8–2 min antes) é dono do envio. Aqui só o último instante.
             if kickoff is None or not dentro_do_fallback(kickoff, agora):
                 continue
             if getattr(m, "kickoff", None) is None:
@@ -2512,14 +2678,13 @@ def processar(matches: List[LiveMatch], hist: Historico, finished: CacheSet,
                 if partes and all(tg.send(p) for p in partes):
                     sinais.add(key_s)
                     if apostas is not None:
-                        apostas.add(m.player1, m.player2, fav, f"{agora_cet().hour:02d}", "ao_vivo")
+                        apostas.add(m.player1, m.player2, fav, f"{agora_cet().hour:02d}", "ao_vivo", odd=odd)
                     if livro is not None:
                         livro.registrar(m.player1, m.player2, fav, kickoff, odd)
                     log.info("SINAL VERDE (ao vivo) → %s vs %s | %s",
                              m.player1, m.player2, " ; ".join(motivos))
 
 def _trazer_resultados(scoremondo: "ScoreMondo", forma: Optional[FormaDia]) -> List[Resultado]:
-    """Página de resultados do ScoreMondo, também gravada na forma do dia."""
     res = scoremondo.fetch_results()
     if forma is not None:
         forma.ingerir_resultados(res)
@@ -2527,8 +2692,6 @@ def _trazer_resultados(scoremondo: "ScoreMondo", forma: Optional[FormaDia]) -> L
 
 def registrar_resultados_r1(resultados: List[Resultado], hist: Historico, finished: CacheSet,
                            odds_list: List[OddsMatch], agora: Optional[datetime] = None) -> int:
-    """Grava no histórico os jogos da 1ª rodada do bloco atual (início hh:00..hh:50)
-    a partir da página de resultados. Em ordem cronológica: o último jogo vale."""
     agora = agora or agora_cet()
     ini = agora.replace(minute=0, second=0, microsecond=0)
     fim = ini.replace(minute=50)
@@ -2555,8 +2718,8 @@ def registrar_resultados_r1(resultados: List[Resultado], hist: Historico, finish
 # REGISTRO DE ENTRADAS (green / red)
 # ══════════════════════════════════════════════════════════════════════════════
 
-ANULAR_APOS_H = 3          # sem resultado depois de 3 h → anulada (não conta)
-INTERVALO_RESULTADOS = 60  # s entre consultas à página de resultados (só com pendentes)
+ANULAR_APOS_H = 3
+INTERVALO_RESULTADOS = 60
 
 class Apostas:
     """Lista persistida de entradas enviadas: dia, bloco, confronto, pick, status."""
@@ -2578,17 +2741,20 @@ class Apostas:
         return next((a for a in self.itens if a["id"] == id_), None)
 
     def add(self, home: str, away: str, pick: str, bloco: str, origem: str,
-            kickoff: Optional[datetime] = None, agora: Optional[datetime] = None) -> bool:
+            kickoff: Optional[datetime] = None, agora: Optional[datetime] = None,
+            odd: Optional[float] = None) -> bool:
         agora = agora or agora_cet()
         ref = kickoff.astimezone(TZ) if kickoff is not None and kickoff.tzinfo else (
             TZ.localize(kickoff) if kickoff is not None else agora)
         dia = ref.strftime("%Y-%m-%d")
-        id_ = chave_sinal(home, away, dia)
+        mercado_slug = re.sub(r"[^a-z0-9]+", "_", (pick or "").strip().lower()).strip("_")
+        id_ = f"{chave_sinal(home, away, dia)}|{mercado_slug or 'pick'}"
         if self.get(id_):
             return False
         self.itens.append({
             "id": id_, "dia": dia, "bloco": bloco, "origem": origem,
             "home": home, "away": away, "pick": pick,
+            "odd": round(float(odd), 2) if isinstance(odd, (int, float)) else None,
             "kickoff": kickoff.isoformat() if kickoff else None,
             "enviado": agora.isoformat(timespec="seconds"),
             "status": "pendente", "placar": None, "resolvido": None, "notificado": False,
@@ -2605,6 +2771,32 @@ class Apostas:
 def _ref(a: dict) -> datetime:
     return datetime.fromisoformat(a["kickoff"] or a["enviado"])
 
+def _resultados_da_forma(forma: Optional[FormaDia]) -> List[Resultado]:
+    if forma is None:
+        return []
+    out: List[Resultado] = []
+    for j in forma.jogos or []:
+        try:
+            sh, sa = int(j["sets_home"]), int(j["sets_away"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        ko = _dt_de(j.get("inicio") or j.get("quando"))
+        tot = j.get("total_pontos")
+        try:
+            tot_int = int(tot) if tot is not None else None
+        except (TypeError, ValueError):
+            tot_int = None
+        out.append(Resultado(
+            home=j.get("home") or "",
+            away=j.get("away") or "",
+            sets_home=sh,
+            sets_away=sa,
+            kickoff=ko,
+            match_id=str(j.get("id") or "forma"),
+            total_pontos=tot_int,
+        ))
+    return out
+
 def resolver_apostas(apostas: Apostas, resultados: List[Resultado], agora: Optional[datetime] = None) -> int:
     """Marca green/red/anulada nas entradas pendentes buscando o resultado real."""
     agora = agora or agora_cet()
@@ -2618,7 +2810,6 @@ def resolver_apostas(apostas: Apostas, resultados: List[Resultado], agora: Optio
             if not (mesmo_sentido or invertido):
                 continue
 
-            # Aceita placar fechado em 3 sets (padrão MD5) ou partida encerrada/retirada com sets válidos
             sets_validos = max(r.sets_home, r.sets_away) >= 3 or (
                 (r.sets_home + r.sets_away) >= 3 and r.sets_home != r.sets_away
             )
@@ -2627,7 +2818,6 @@ def resolver_apostas(apostas: Apostas, resultados: List[Resultado], agora: Optio
 
             if r.kickoff is not None:
                 if a.get("kickoff"):
-                    # Tolerância ampliada para atrasos na grade da Liga Pro (até 50 min)
                     if abs((r.kickoff - ref).total_seconds()) > 50 * 60:
                         continue
                 elif not (ref - timedelta(minutes=90) <= r.kickoff <= ref + timedelta(minutes=30)):
@@ -2639,14 +2829,31 @@ def resolver_apostas(apostas: Apostas, resultados: List[Resultado], agora: Optio
             break
 
         if achado:
-            if mesmo_jogador(achado.home, a["pick"]):
-                sp, so = achado.sets_home, achado.sets_away
+            pick = (a.get("pick") or "").strip()
+            m_pts = re.match(r"^(over|under)\s+(\d+(?:\.\d+)?)", pick.lower())
+            if m_pts:
+                if achado.total_pontos is None:
+                    if agora - ref > timedelta(hours=ANULAR_APOS_H):
+                        a["status"] = "anulada"
+                        a["resolvido"] = agora.isoformat(timespec="seconds")
+                        n += 1
+                    continue
+                lado, linha = m_pts.group(1), float(m_pts.group(2))
+                ganhou = (achado.total_pontos > linha) if lado == "over" else (achado.total_pontos < linha)
+                a["status"] = "green" if ganhou else "red"
+                a["placar"] = (
+                    f"{achado.home} {achado.sets_home}-{achado.sets_away} {achado.away} "
+                    f"({achado.total_pontos} pts)"
+                )
             else:
-                sp, so = achado.sets_away, achado.sets_home
-            a["status"] = "green" if sp > so else "red"
-            a["placar"] = f"{achado.home} {achado.sets_home}-{achado.sets_away} {achado.away}"
+                if mesmo_jogador(achado.home, pick):
+                    sp, so = achado.sets_home, achado.sets_away
+                else:
+                    sp, so = achado.sets_away, achado.sets_home
+                a["status"] = "green" if sp > so else "red"
+                a["placar"] = f"{achado.home} {achado.sets_home}-{achado.sets_away} {achado.away}"
             a["resolvido"] = agora.isoformat(timespec="seconds")
-            log.info("[RESOLVIDO] %s -> %s (%s)", a.get("pick"), a["status"].upper(), a["placar"])
+            log.info("[RESOLVIDO] %s -> %s (%s)", pick, a["status"].upper(), a["placar"])
             n += 1
         elif agora - ref > timedelta(hours=ANULAR_APOS_H):
             a["status"] = "anulada"
@@ -2674,18 +2881,25 @@ def notificar_resultados(apostas: Apostas, tg: "Telegram") -> int:
     """Envia ao grupo o GREEN/RED/anulada de cada entrada resolvida ainda não avisada."""
     n = 0
     for a in apostas.itens:
-        if a.get("notificado") or a.get("status") not in ("green", "red", "void"):
+        if a.get("notificado") or a.get("status") not in ("green", "red", "anulada", "void"):
             continue
-        hoje = estatisticas(apostas.periodo(agora_cet().strftime("%Y-%m-%d"), agora_cet().strftime("%Y-%m-%d")))
-        conf = f"🏓 {nome_exibicao(a['home'])} vs {nome_exibicao(a['away'])}\n👑 Alvo: <b>{nome_exibicao(a['pick'])}</b> @ <code>{a['odd']:.2f}</code>"
+        hoje_str = agora_cet().strftime("%Y-%m-%d")
+        hoje = estatisticas(apostas.periodo(hoje_str, hoje_str))
+        odd_val = a.get("odd")
+        odd_txt = f" @ <code>{float(odd_val):.2f}</code>" if isinstance(odd_val, (int, float)) else ""
+        alvo_exib, _ = _formatar_alvo_entrada(a.get("pick") or "")
+        conf = (
+            f"🏓 {nome_exibicao(a['home'])} vs {nome_exibicao(a['away'])}\n"
+            f"👑 Alvo: <b>{_html(alvo_exib)}</b>{odd_txt}"
+        )
         if a["status"] in ("green", "red"):
             cab = "✅🔥 <b>GREEN CONFIRMADO!</b>" if a["status"] == "green" else "❌🛡️ <b>RED NO JOGO</b>"
-            corpo = f"{conf}\n📊 Placar: <b>{a['placar']}</b>"
+            corpo = f"{conf}\n📊 Placar: <b>{_html(a['placar'] or '')}</b>"
             texto = f"{cab}\n\n{corpo}\n\n📅 Hoje: <b>{fmt_placar(hoje)}</b>"
             ctx_res = (
-                f"Deu GREEN em {a['pick']} ({a['placar']})! Placar hoje: {fmt_placar(hoje)}. Comemore com emojis de lucro e fogo."
+                f"Deu GREEN em {alvo_exib} ({a['placar']})! Placar hoje: {fmt_placar(hoje)}. Comemore com emojis de lucro e fogo."
                 if a["status"] == "green" else
-                f"Deu RED em {a['pick']} ({a['placar']}). Placar hoje: {fmt_placar(hoje)}. Incentive disciplina e cabeça fria com emojis."
+                f"Deu RED em {alvo_exib} ({a['placar']}). Placar hoje: {fmt_placar(hoje)}. Incentive disciplina e cabeça fria com emojis."
             )
             texto += "\n\n💬 <i>" + _html(frase_dinamica_gemini(ctx_res, "🧠🛡️ " + frase_motivacional() + " 🏓🔥")) + "</i>"
         else:
@@ -2697,7 +2911,7 @@ def notificar_resultados(apostas: Apostas, tg: "Telegram") -> int:
             apostas.save()
             n += 1
         else:
-            break  # tenta de novo no próximo ciclo
+            break
     return n
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2759,7 +2973,7 @@ def texto_placar(apostas: Apostas, titulo: str, d1: str, d2: str, por_bloco: boo
             if sb["g"] or sb["r"] or sb["p"] or sb["v"]:
                 linhas.append(f"• {rotulo}: {fmt_placar(sb)}" + (f" · {sb['p']} pend." if sb["p"] else ""))
     return "\n".join(linhas)
-  
+
 def texto_resumo_dia(apostas: Apostas, agora: Optional[datetime] = None) -> str:
     agora = agora or agora_cet()
     dia = agora.strftime("%Y-%m-%d")
@@ -2784,9 +2998,10 @@ def texto_entradas_hoje(apostas: Apostas) -> str:
     for a in lista:
         hk = datetime.fromisoformat(a["kickoff"]).strftime("%H:%M") if a["kickoff"] else f"{a['bloco']}h ao vivo"
         extra = f" — <code>{esc(a['placar'])}</code>" if a.get("placar") else ""
+        alvo_exib, _ = _formatar_alvo_entrada(a.get("pick") or "")
         linhas.append(
-            f"{em.get(a['status'], '•')} <code>{hk}</code> · 👑 <b>{esc(a['pick'])}</b> "
-            f"({esc(a['home'])} vs {esc(a['away'])}){extra}"
+            f"{em.get(a['status'], '•')} <code>{hk}</code> · 👑 <b>{esc(alvo_exib)}</b> "
+            f"({esc(nome_exibicao(a['home']))} vs {esc(nome_exibicao(a['away']))}){extra}"
         )
     linhas += ["━━━━━━━━━━━━━━━━━━", f"📊 𝗣𝗹𝗮𝗰𝗮𝗿: <b>{fmt_placar(estatisticas(lista))}</b>"]
     return "\n".join(linhas)
@@ -2794,7 +3009,7 @@ def texto_entradas_hoje(apostas: Apostas) -> str:
 HORARIOS_TXT = (
     "Somente <b>Czech Liga Pro</b>, 24 h (madrugada inclusive)\n"
     "🎯 ENTRADA: <b>≈5 min antes de cada bloco</b> de início\n"
-    "Forma: últimos 2–3 jogos em 4 h · odd do alvo 1.25–1.85"
+    "Mercados: Vencedor e Pontos (Over/Under) · odd 1.25–1.85"
 )
 
 AJUDA_TXT = (
@@ -2814,7 +3029,6 @@ ADMIN_CMDS = {"/status", "/lista", "/zerar", "/limpo", "/desgaste", "/derrota"}
 
 def processar_comando(text: str, hist: Historico, tg: "Telegram", apostas: Apostas,
                       chat_id: str, user_id: str, msg_id: Optional[int] = None) -> bool:
-    """Retorna True se era um comando."""
     text = text.strip()
     partes = text.split(maxsplit=1)
     cmd = partes[0].lower().split("@", 1)[0]
@@ -2873,7 +3087,7 @@ def processar_comando(text: str, hist: Historico, tg: "Telegram", apostas: Apost
                 hist.set_resultado(arg, res)
                 resp(f"Registrado: <b>{esc(arg)}</b> → {res}")
         return True
-    return True   # comando desconhecido: ignora em silêncio
+    return True
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CONVERSA: saudações agendadas, respostas e frases
@@ -2929,7 +3143,6 @@ FRASES = [
 _ultimas_frases: List[int] = []
 
 def frase_dinamica_gemini(contexto: str, fallback: str) -> str:
-    """Pede ao Gemini uma frase curta, expressiva e cheia de emojis."""
     if not _chave_gemini():
         return fallback
     prompt = (
@@ -2952,16 +3165,10 @@ def frase_motivacional() -> str:
     del _ultimas_frases[:-10]
     return FRASES[i]
 
-# Resumo das entradas do dia anterior, cerca de 00:05 Europe/Prague.
 RESUMO_HORA = (0, 5)
-RESUMO_JANELA_MIN = 15  # 00:05 até 00:20, para um reinício curto ainda alcançar
+RESUMO_JANELA_MIN = 15
 
 class LivroEntradas:
-    """Entradas aprovadas que saíram no Telegram, em DATA_DIR/entradas_v5.json.
-
-    Cada item guarda dia, horário do bloco, confronto, alvo, adversário e odd.
-    `ultimo_resumo` é o dia (YYYY-MM-DD) que já teve o resumo das 00:05.
-    """
     def __init__(self, path: Optional[Path] = None):
         self.path = path or ENTRADAS_SALDO_FILE
         self.itens: List[dict] = []
@@ -2994,12 +3201,12 @@ class LivroEntradas:
 
     def registrar(self, home: str, away: str, alvo: str, kickoff: Optional[datetime],
                   odd: Optional[float], gap: Optional[float] = None, gemini: str = "") -> bool:
-        """Grava uma entrada já enviada. Repetir o mesmo confronto no dia não duplica."""
         if kickoff is None or odd is None:
             return False
         ref = kickoff.astimezone(TZ) if kickoff.tzinfo else TZ.localize(kickoff)
         dia = ref.strftime("%Y-%m-%d")
-        id_ = chave_sinal(home, away, dia)
+        mercado_slug = re.sub(r"[^a-z0-9]+", "_", (alvo or "").strip().lower()).strip("_")
+        id_ = f"{chave_sinal(home, away, dia)}|{mercado_slug or 'pick'}"
         if self.get(id_):
             return False
         adversario = _adversario_do_alvo(alvo, home, away)
@@ -3033,10 +3240,8 @@ class LivroEntradas:
     def do_dia(self, dia: str) -> List[dict]:
         return [e for e in self.itens if e.get("dia") == dia]
 
-
 def _inicio_entrada(entrada: dict) -> Optional[datetime]:
     return _dt_de(entrada.get("inicio")) or _dt_de(f"{entrada.get('dia')}T{entrada.get('hora')}:00")
-
 
 def _par_da_entrada(entrada: dict, home: str, away: str) -> bool:
     return (
@@ -3044,18 +3249,26 @@ def _par_da_entrada(entrada: dict, home: str, away: str) -> bool:
         or (mesmo_jogador(home, entrada.get("away") or "") and mesmo_jogador(away, entrada.get("home") or ""))
     )
 
-
 def _perto_do_inicio(inicio: Optional[datetime], referencia: Optional[datetime], minutos: int = 45) -> bool:
     if inicio is None or referencia is None:
         return False
     return abs((inicio - referencia).total_seconds()) <= minutos * 60
 
-
 def _aplicar_placar(entrada: dict, sets_home: int, sets_away: int, home: str, away: str,
-                    agora: datetime) -> bool:
+                    agora: datetime, total_pontos: Optional[int] = None) -> bool:
     if max(sets_home, sets_away) != 3:
         return False
-    alvo = entrada.get("alvo") or ""
+    alvo = (entrada.get("alvo") or "").strip()
+    m_pts = re.match(r"^(over|under)\s+(\d+(?:\.\d+)?)", alvo.lower())
+    if m_pts:
+        if total_pontos is None:
+            return False
+        lado, linha = m_pts.group(1), float(m_pts.group(2))
+        ganhou = (total_pontos > linha) if lado == "over" else (total_pontos < linha)
+        entrada["status"] = "green" if ganhou else "red"
+        entrada["placar"] = f"{sets_home}-{sets_away} ({total_pontos} pts)"
+        entrada["resolvido"] = agora.astimezone(TZ).isoformat(timespec="seconds")
+        return True
     if mesmo_jogador(alvo, home) or _nome_resultado(alvo, home):
         sa, so = sets_home, sets_away
     elif mesmo_jogador(alvo, away) or _nome_resultado(alvo, away):
@@ -3067,7 +3280,6 @@ def _aplicar_placar(entrada: dict, sets_home: int, sets_away: int, home: str, aw
     entrada["resolvido"] = agora.astimezone(TZ).isoformat(timespec="seconds")
     return True
 
-
 def _nome_resultado(nosso: str, outro: str) -> bool:
     if not nosso or not outro:
         return False
@@ -3077,7 +3289,6 @@ def _nome_resultado(nosso: str, outro: str) -> bool:
         return bool(nomes_compativeis(nosso, outro))
     except Exception:
         return False
-
 
 def _liquidar_pela_forma(entrada: dict, forma: Optional[FormaDia], agora: datetime) -> bool:
     if forma is None:
@@ -3100,12 +3311,11 @@ def _liquidar_pela_forma(entrada: dict, forma: Optional[FormaDia], agora: dateti
             continue
         delta = abs((inicio - ref).total_seconds()) if inicio and ref else 0
         if melhor_delta is None or delta < melhor_delta:
-            melhor, melhor_delta = (home, away, sh, sa), delta
+            melhor, melhor_delta = (home, away, sh, sa, jogo.get("total_pontos")), delta
     if melhor is None:
         return False
-    home, away, sh, sa = melhor
-    return _aplicar_placar(entrada, sh, sa, home, away, agora)
-
+    home, away, sh, sa, tot_pts = melhor
+    return _aplicar_placar(entrada, sh, sa, home, away, agora, total_pontos=tot_pts)
 
 def _liquidar_pelo_historico(entrada: dict, historico, agora: datetime) -> bool:
     jogos = getattr(historico, "jogos", None) if historico is not None else None
@@ -3137,7 +3347,6 @@ def _liquidar_pelo_historico(entrada: dict, historico, agora: datetime) -> bool:
     home, away, sh, sa = melhor
     return _aplicar_placar(entrada, sh, sa, home, away, agora)
 
-
 def _jogo_csv(home: str, away: str) -> str:
     return f"{nome_exibicao(home)} vs {nome_exibicao(away)}"
 
@@ -3160,10 +3369,6 @@ def _escrever_auditoria(campos: List[str], linhas: List[dict]):
     tmp.replace(AUDITORIA_FILE)
 
 def _anexar_auditoria(entrada: dict):
-    """Uma linha por entrada. O resultado entra depois, quando o placar já existe.
-
-    Arquivo antigo, sem a coluna gemini, ganha a coluna vazia nas linhas que já existiam.
-    """
     campos, linhas = _ler_auditoria()
     if not campos:
         campos = list(AUDITORIA_CAMPOS)
@@ -3171,11 +3376,12 @@ def _anexar_auditoria(entrada: dict):
         campos = list(campos) + ["gemini"]
         _escrever_auditoria(campos, linhas)
     gap = entrada.get("gap")
+    alvo_exib, _ = _formatar_alvo_entrada(entrada.get("alvo") or "")
     row = {
         "data": entrada.get("dia") or "",
         "horario": entrada.get("hora") or "",
         "jogo": _jogo_csv(entrada.get("home") or "", entrada.get("away") or ""),
-        "alvo": nome_exibicao(entrada.get("alvo") or ""),
+        "alvo": alvo_exib.replace("📊 ", ""),
         "odd": f"{float(entrada['odd']):.2f}" if entrada.get("odd") is not None else "",
         "gap": "" if gap is None else f"{float(gap):.1f}",
         "resultado": "",
@@ -3189,7 +3395,6 @@ def _anexar_auditoria(entrada: dict):
         writer.writerow({c: row.get(c, "") for c in campos})
 
 def fechar_auditoria(livro: LivroEntradas, agora: Optional[datetime] = None) -> int:
-    """Preenche GREEN/RED ~35 min depois do apito, com o placar já liquidado. Sem rede."""
     if not AUDITORIA_FILE.exists():
         return 0
     agora = agora or agora_cet()
@@ -3227,7 +3432,6 @@ def fechar_auditoria(livro: LivroEntradas, agora: Optional[datetime] = None) -> 
 
 def liquidar_livro(livro: LivroEntradas, forma: Optional[FormaDia] = None,
                    historico=None, agora: Optional[datetime] = None) -> int:
-    """Fecha pendentes com resultados já guardados. Não consulta a rede."""
     agora = agora or agora_cet()
     n = 0
     for entrada in livro.pendentes():
@@ -3240,7 +3444,6 @@ def liquidar_livro(livro: LivroEntradas, forma: Optional[FormaDia] = None,
     fechar_auditoria(livro, agora)
     return n
 
-
 def _saldo_un(itens: List[dict]) -> float:
     total = 0.0
     for entrada in itens:
@@ -3250,10 +3453,8 @@ def _saldo_un(itens: List[dict]) -> float:
             total -= 1.0
     return round(total, 2)
 
-
 def _fmt_un(valor: float) -> str:
     return f"{valor:+.2f}"
-
 
 def _linha_anteriores(itens: List[dict]) -> str:
     if not itens:
@@ -3261,7 +3462,6 @@ def _linha_anteriores(itens: List[dict]) -> str:
     g = sum(1 for e in itens if e.get("status") == "green")
     r = sum(1 for e in itens if e.get("status") == "red")
     return f"Pendentes anteriores: {g} green, {r} red ({_fmt_un(_saldo_un(itens))} un)"
-
 
 def texto_resumo_entradas(dia, do_dia: List[dict], anteriores: List[dict]) -> str:
     rotulo = dia.strftime("%d/%m")
@@ -3284,7 +3484,6 @@ def texto_resumo_entradas(dia, do_dia: List[dict], anteriores: List[dict]) -> st
         linhas.append(f"📌 {extra}")
     return "\n".join(linhas)
 
-
 def _marcar_resumo(livro: LivroEntradas, ontem: str, do_dia: List[dict], anteriores: List[dict]):
     for entrada in do_dia:
         entrada["incluido"] = True
@@ -3295,14 +3494,9 @@ def _marcar_resumo(livro: LivroEntradas, ontem: str, do_dia: List[dict], anterio
     livro.ultimo_resumo = ontem
     livro.save()
 
-
 def enviar_resumo_diario(tg: "Telegram", livro: LivroEntradas,
                          forma: Optional[FormaDia] = None, historico=None,
                          agora: Optional[datetime] = None) -> bool:
-    """Uma vez por dia, entre 00:05 e 00:20 Europe/Prague, resume o dia anterior.
-
-    Não consulta o MoviOdds. O dia enviado fica em entradas_v5.json.
-    """
     agora = agora or agora_cet()
     local = agora.astimezone(TZ_PRAGA) if agora.tzinfo else TZ_PRAGA.localize(agora)
     if local.hour != 0 or not (RESUMO_HORA[1] <= local.minute <= RESUMO_HORA[1] + RESUMO_JANELA_MIN):
@@ -3330,10 +3524,8 @@ def enviar_resumo_diario(tg: "Telegram", livro: LivroEntradas,
              ontem, len(do_dia), g, r, p, _fmt_un(_saldo_un(do_dia)))
     return True
 
-
-# (chave, hora, minuto) — fora dos horários de entrada (hh:55) e depois do resumo (22:30)
 AGENDA_SAUDACOES = [("bomdia", 7, 50), ("boatarde", 12, 40), ("boanoite", 22, 35)]
-JANELA_SAUDACAO_MIN = 4    # termina antes do hh:55, agora que toda hora tem entrada
+JANELA_SAUDACAO_MIN = 4
 HORA_RESUMO = (22, 30)
 
 def periodo_do_dia(h: int) -> str:
@@ -3362,7 +3554,6 @@ def texto_saudacao_agendada(chave: str, apostas: Apostas) -> str:
 def tarefas_agendadas(tg: "Telegram", apostas: Apostas, eventos: CacheSet, agora: Optional[datetime] = None,
                       livro: Optional[LivroEntradas] = None, forma: Optional[FormaDia] = None,
                       historico=None) -> List[str]:
-    """Resumo das 22:30, resumo das entradas às 00:05 e saudações. Cada um no máximo 1x por dia."""
     agora = agora or agora_cet()
     dia = agora.strftime("%Y-%m-%d")
     feitos = []
@@ -3384,7 +3575,7 @@ def tarefas_agendadas(tg: "Telegram", apostas: Apostas, eventos: CacheSet, agora
         k = f"{chave}|{dia}"
         if ini <= agora <= ini + timedelta(minutes=JANELA_SAUDACAO_MIN) and not eventos.has(k):
             if chave == "boanoite" and not eventos.has(f"resumo|{dia}"):
-                continue   # boa noite sempre depois do resumo
+                continue
             if tg.send(texto_saudacao_agendada(chave, apostas)):
                 eventos.add(k)
                 feitos.append(chave)
@@ -3406,7 +3597,6 @@ RESPOSTAS_EXTRA = [
 ]
 
 class Conversa:
-    """Respostas naturais no grupo, com limite por pessoa."""
     def __init__(self, bot_username: str = "", bot_id: str = ""):
         self.bot_username = (bot_username or "").lower()
         self.bot_id = str(bot_id or "")
@@ -3467,7 +3657,6 @@ def boas_vindas(membros: List[dict]) -> Optional[str]:
             + AVISO_RESPONSAVEL)
 
 def tratar_update(u: dict, tg: "Telegram", hist: Historico, apostas: Apostas, conversa: Conversa) -> Optional[str]:
-    """Processa um update do Telegram. Retorna um rótulo do que foi feito (para log/testes)."""
     mcm = u.get("my_chat_member")
     if mcm:
         chat = mcm.get("chat") or {}
@@ -3491,12 +3680,11 @@ def tratar_update(u: dict, tg: "Telegram", hist: Historico, apostas: Apostas, co
     text = msg.get("text") or ""
     chats_ok = {str(GROUP_ID), str(CHAT_ID)} | ({str(DISCUSSION_ID)} if DISCUSSION_ID else set())
     permitido = chat_id in chats_ok
-    # chats onde o bot conversa/dá boas-vindas: grupo de discussão e o destino principal se for grupo
     eh_canal = "channel_post" in u or (msg.get("chat") or {}).get("type") == "channel"
     conversa_ok = permitido and not eh_canal
 
     if msg.get("is_automatic_forward"):
-        return None   # post do canal repassado automaticamente ao grupo de discussão
+        return None
     if msg.get("new_chat_members") and conversa_ok and chat_id != str(CHAT_ID):
         t = boas_vindas(msg["new_chat_members"])
         if t:
@@ -3508,13 +3696,13 @@ def tratar_update(u: dict, tg: "Telegram", hist: Historico, apostas: Apostas, co
     if text.startswith("/"):
         cmd = text.split()[0].lower().split("@", 1)
         if len(cmd) > 1 and conversa.bot_username and cmd[1] != conversa.bot_username:
-            return None   # comando para outro bot
+            return None
         if cmd[0] == "/id" or permitido:
             processar_comando(text, hist, tg, apostas, chat_id, user_id, msg.get("message_id"))
             return "comando"
         return None
     if not conversa_ok or msg.get("sender_chat"):
-        return None   # canal não conversa; mensagens enviadas "como canal" também não
+        return None
     resposta = conversa.responder(msg, apostas)
     if resposta:
         tg.send(resposta, chat_id=chat_id, reply_to=msg.get("message_id"))
@@ -3605,22 +3793,18 @@ def main():
                     hist.limpar_antigo()
                 ultimo_modo = modo
 
-            # MoviOdds só nos minutos da grade (odds ou resultados). O resto reusa o cache.
             odds_now = obter_odds(moviodds, odds_cache)
             obter_resultados(moviodds, forma, resultados_cache)
-            # SportsAPI365: no máximo uma coleta por dia, depois das 00:30. Nunca por jogo.
             historico_anterior.atualizar(agora_cet())
 
             agora_loop = time.time()
             if ultimo_fixtures == 0.0 or agora_loop - ultimo_fixtures >= 20:
                 ultimo_fixtures = agora_loop
                 fixtures_cache = scoremondo.fetch_fixtures()
-            # Entrada por bloco, em qualquer modo. Fixtures + odds: um não esconde o outro.
             previa = fonte_entrada(fixtures_cache, odds_now)
             odds_now = talvez_odds_imediatas(moviodds, odds_cache, previa)
             fonte = fonte_entrada(fixtures_cache, odds_now)
             agora_local = agora_cet()
-            # Pré-jogo e ao vivo: o horário anterior vale mesmo sem placar gravado.
             agenda_vista = coletar_agenda(list(fixtures_cache) + list(odds_now or []), agora_local, agenda_vista)
             if blocos_devidos(fonte, agora_local):
                 registrar_resultados_r1(_trazer_resultados(scoremondo, forma), hist, finished, odds_now)
@@ -3644,10 +3828,14 @@ def main():
                 vivos_terminados = [Resultado(m.player1, m.player2, m.score1, m.score2, None, "live")
                                     for m in matches if m.finished]
 
-            # GREEN / RED das entradas pendentes
-            pend = [a for a in apostas.pendentes() if agora_cet() >= _ref(a) + timedelta(minutes=15)]
+            # GREEN / RED das entradas pendentes (reaproveita forma já carregada sem gastar chamadas extras)
+            if apostas.pendentes():
+                res_forma = _resultados_da_forma(forma)
+                if res_forma:
+                    resolver_apostas(apostas, res_forma)
             if vivos_terminados and apostas.pendentes():
                 resolver_apostas(apostas, vivos_terminados)
+            pend = [a for a in apostas.pendentes() if agora_cet() >= _ref(a) + timedelta(minutes=15)]
             if pend and agora_ts - ultimo_resultados >= INTERVALO_RESULTADOS:
                 ultimo_resultados = agora_ts
                 resolver_apostas(apostas, _trazer_resultados(scoremondo, forma))
