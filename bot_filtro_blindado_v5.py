@@ -2308,7 +2308,8 @@ def _texto_entrada(hora: str, home: str, away: str, alvo: str, odd: Optional[flo
         f"💰 𝗢𝗱𝗱: <code>{odd_txt}</code>  |  🎯 𝗦𝘁𝗮𝗸𝗲: <code>{stake}</code>\n"
         f"{bloco_gemini}"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"💬 <i>{random.choice(fechamentos)}</i>"
+        f"💬 <i>{_html(frase_dinamica_gemini(f'Entrada em {nome_exibicao(alvo)} @ {odd_txt}. {veredito}', random.choice(fechamentos)))}</i>"
+    )
     )
 
 def _texto_sem_entrada(hora: str) -> str:
@@ -2662,18 +2663,13 @@ def notificar_resultados(apostas: Apostas, tg: "Telegram") -> int:
     """Envia ao grupo o GREEN/RED/anulada de cada entrada resolvida ainda não avisada."""
     n = 0
     for a in apostas.itens:
-        if a["status"] == "pendente" or a.get("notificado"):
-            continue
-        # placar corrente: só o que já foi anunciado + esta entrada
-        hoje = estatisticas([x for x in apostas.periodo(a["dia"], a["dia"])
-                             if x is a or (x["status"] != "pendente" and x.get("notificado"))])
-        conf = f"{esc(a['home'])} vs {esc(a['away'])}"
-        if a["status"] == "green":
-            cab = "🟢🎉 𝗚𝗥𝗘𝗘𝗡 𝗡𝗔 𝗖𝗢𝗡𝗧𝗔! 🎉🟢"
-            corpo = f"🏓 {esc(a['placar'])}\n👑 𝗔𝗹𝘃𝗼: <b>{esc(a['pick'])}</b> bateu lindo! 💸🔥"
-        elif a["status"] == "red":
-            cab = "❌😤 𝗥𝗘𝗗 𝗡𝗔 𝗥𝗢𝗗𝗔𝗗𝗔"
-            corpo = f"🏓 {esc(a['placar'])}\n👑 𝗔𝗹𝘃𝗼: <b>{esc(a['pick'])}</b> — segue o baile, cabeça fria!"
+      if a["status"] in ("green", "red"):
+            ctx_res = (
+                f"Deu GREEN em {a['pick']} ({a['placar']})! Placar hoje: {fmt_placar(hoje)}. Comemore com emojis de lucro e fogo."
+                if a["status"] == "green" else
+                f"Deu RED em {a['pick']} ({a['placar']}). Placar hoje: {fmt_placar(hoje)}. Incentive disciplina e cabeça fria com emojis."
+            )
+            texto += "\n\n💬 <i>" + _html(frase_dinamica_gemini(ctx_res, "🧠🛡️ " + frase_motivacional() + " 🏓🔥")) + "</i>"
         else:
             cab = "⚪ 𝗘𝗻𝘁𝗿𝗮𝗱𝗮 𝗮𝗻𝘂𝗹𝗮𝗱𝗮"
             corpo = f"{conf}\nResultado não encontrado — não conta no placar."
@@ -2915,6 +2911,23 @@ FRASES = [
     "Ganhar pouco e sempre é melhor que perder muito de uma vez.",
 ]
 _ultimas_frases: List[int] = []
+
+def frase_dinamica_gemini(contexto: str, fallback: str) -> str:
+    """Pede ao Gemini uma frase curta, expressiva e cheia de emojis."""
+    if not _chave_gemini():
+        return fallback
+    prompt = (
+        "Crie 1 frase curta (máximo 95 caracteres), vibrante e motivacional em português "
+        "para um grupo de apostas em tênis de mesa (Czech Liga Pro). "
+        "Use 3 a 4 emojis temáticos espalhados pela frase (🏓🔥💸🎯🛡️🚀⚡💪). "
+        "Não use aspas nem hashtags. "
+        f"Contexto: {contexto}"
+    )
+    txt = consultar_gemini(prompt)
+    if not txt:
+        return fallback
+    linha = txt.strip().splitlines()[0].strip(" \"'“”")
+    return linha[:120] if linha else fallback
 
 def frase_motivacional() -> str:
     opcoes = [i for i in range(len(FRASES)) if i not in _ultimas_frases] or list(range(len(FRASES)))
