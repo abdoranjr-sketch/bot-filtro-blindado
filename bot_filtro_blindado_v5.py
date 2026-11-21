@@ -113,6 +113,7 @@ ENTRADAS_FILE = DATA_DIR / "entradas_enviadas_v4.json"
 APOSTAS_FILE = DATA_DIR / "apostas_v5.json"      # entradas + green/red
 ENTRADAS_SALDO_FILE = DATA_DIR / "entradas_v5.json"  # entradas aprovadas e o resumo das 00:05
 AUDITORIA_FILE = DATA_DIR / "auditoria_v5.csv"       # data, horario, jogo, alvo, odd, gap, resultado, gemini
+LICOES_FILE = DATA_DIR / "licoes_v5.txt"
 AUDITORIA_CAMPOS = ["data", "horario", "jogo", "alvo", "odd", "gap", "resultado", "gemini"]
 AUDITORIA_APOS_MIN = 35
 EVENTOS_FILE = DATA_DIR / "eventos_v5.json"      # resumo/saudações já enviados
@@ -2157,6 +2158,69 @@ def _h2h_txt(extras: List[str]) -> str:
             return " ".join(limpo.split())
     return "sem H2H"
 
+def ler_licoes() -> str:
+    if not LICOES_FILE.exists():
+        return ""
+    try:
+        return LICOES_FILE.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+
+def historico_alvo_bot(alvo: str) -> str:
+    """Conta quantos GREEN/RED este jogador já deu nas entradas do bot."""
+    _campos, linhas = _ler_auditoria()
+    g = r = 0
+    for row in linhas:
+        res = (row.get("resultado") or "").strip().upper()
+        if res not in ("GREEN", "RED"):
+            continue
+        if mesmo_jogador(row.get("alvo") or "", alvo):
+            if res == "GREEN":
+                g += 1
+            else:
+                r += 1
+    if g + r == 0:
+        return "estreante no bot"
+    return f"{g} GREEN / {r} RED no bot"
+
+def atualizar_licoes_diarias(tg: "Telegram") -> bool:
+    """Lê os últimos 40 resultados da auditoria e pede ao Gemini 5 lições práticas."""
+    if not _chave_gemini():
+        return False
+    _campos, linhas = _ler_auditoria()
+    fechadas = [
+        r for r in linhas
+        if (r.get("resultado") or "").strip().upper() in ("GREEN", "RED")
+    ][-40:]
+    if len(fechadas) < 5:
+        return False
+
+    resumo_csv = "\n".join(
+        f"{r.get('data')} {r.get('horario')} | {r.get('alvo')} @ {r.get('odd')} | "
+        f"gap {r.get('gap')} | {r.get('resultado')}"
+        for r in fechadas
+    )
+    prompt = (
+        "Você é o estrategista do bot Filtro Blindado (Czech Liga Pro).\n"
+        "Abaixo estão os últimos resultados reais (GREEN/RED) do bot.\n"
+        "Identifique padrões de erro e acerto (faixa de odd, horário, gap, jogadores) "
+        "e escreva exatamente 5 lições curtas (máx. 100 caracteres cada, uma por linha, começando com '- ') "
+        "para guiar as análises de amanhã. Sem introdução.\n\n"
+        + resumo_csv
+    )
+    texto = consultar_gemini(prompt)
+    if not texto:
+        return False
+    LICOES_FILE.write_text(texto.strip(), encoding="utf-8")
+    tg.send(
+        "🧠 <b>Aprendizado diário atualizado!</b>\n\n"
+        f"{_html(texto.strip())}\n\n"
+        "<i>Essas lições já entram automaticamente nas análises de hoje.</i>",
+        chat_id=CHAT_ID,
+    )
+    log.info("[APRENDIZADO] Lições diárias atualizadas (%s jogos analisados)", len(fechadas))
+    return True
+
 def _prompt_gemini(itens: list, hist: Historico, forma: Optional[FormaDia],
                    agenda: Optional[List[OddsMatch]]) -> str:
     agora = agora_cet()
@@ -2170,21 +2234,29 @@ def _prompt_gemini(itens: list, hist: Historico, forma: Optional[FormaDia],
             alvo, o.kickoff, partidas_do_jogador(alvo, hist, forma), agenda or [], adv)
         odd = f"{d.odd:.2f}" if isinstance(d.odd, (int, float)) else "—"
         gap = "—" if d.gap is None else f"{d.gap:.1f}"
+        ficha = historico_alvo_bot(alvo)
         linhas.append(
             f"{i}. {_hora_jogo(o)} {nome_exibicao(o.home)} vs {nome_exibicao(o.away)} | "
-            f"alvo {nome_exibicao(alvo)} @ {odd} | "
+            f"alvo {nome_exibicao(alvo)} @ {odd} ({ficha}) | "
             f"score_forma alvo {fa.score_forma:.1f} sets [{_sets_recentes(alvo, hist, forma, agora)}] | "
             f"score_forma adversário {fb.score_forma:.1f} sets [{_sets_recentes(adv, hist, forma, agora)}] | "
             f"gap {gap} | triangulação +{d.bonus:.1f} | "
             f"fadiga alvo {'sim' if fa.desgaste_ultimo_jogo else 'não'} | "
             f"horário anterior {'sim' if ant else 'não'} | {_h2h_txt(extras)}"
         )
+    licoes = ler_licoes()
+    bloco_licoes = f"\nLições aprendidas nos últimos dias:\n{licoes}\n" if licoes else ""
     return (
-        "Você analisa tênis de mesa da Czech Liga Pro.\n"
+        "Você é um analista rigoroso de tênis de mesa (Czech Liga Pro). "
+        "Avalie cada entrada buscando superioridade real de forma e evitando armadilhas:\n"
+        "- Priorize domínio limpo (3-0/3-1) contra adversário em queda clara.\n"
+        "- Rebaixe para Baixa se o jogador tiver histórico muito ruim no bot (ex: 0 GREEN / 2+ RED), "
+        "freguesia pesada no H2H ou odd suspeita.\n"
+        f"{bloco_licoes}"
         "Para cada entrada, responda exatamente uma linha, na mesma ordem, sem numerar:\n"
-        "Confiança: Alta — motivo\n"
-        "A confiança só pode ser Alta, Média ou Baixa. Uma frase de motivo. "
-        "No máximo 200 caracteres por linha. Sem introdução e sem repetir os números.\n\n"
+        "Confiança: Alta — motivo curto e direto\n"
+        "A confiança só pode ser Alta, Média ou Baixa. Máximo 180 caracteres por linha. "
+        "Sem introdução e sem repetir os números brutos.\n\n"
         "Entradas:\n" + "\n".join(linhas)
     )
 
@@ -2225,6 +2297,7 @@ def _texto_entrada(hora: str, home: str, away: str, alvo: str, odd: Optional[flo
         "Tudo na régua, zero emoção e foco no lucro! 🧠🔥",
         "Filtro cravado! Só confia no processo! 🙌⚡",
     ]
+   stake = "1.0 un 🔥" if "confiança: alta" in veredito.lower() else "0.5 un 🛡️"
     bloco_gemini = f"🤖 𝗚𝗲𝗺𝗶𝗻𝗶: <i>{_html(veredito)}</i>\n" if veredito else ""
     return (
         f"{random.choice(titulos)}\n"
@@ -2232,7 +2305,7 @@ def _texto_entrada(hora: str, home: str, away: str, alvo: str, odd: Optional[flo
         f"⏰ 𝗛𝗼𝗿𝗮́𝗿𝗶𝗼: <code>{hora}</code>\n"
         f"🏓 𝗝𝗼𝗴𝗼: {_html(nome_exibicao(home))} vs {_html(nome_exibicao(away))}\n"
         f"👑 𝗔𝗹𝘃𝗼: <b>{_html(nome_exibicao(alvo))}</b>\n"
-        f"💰 𝗢𝗱𝗱: <code>{odd_txt}</code>\n"
+        f"💰 𝗢𝗱𝗱: <code>{odd_txt}</code>  |  🎯 𝗦𝘁𝗮𝗸𝗲: <code>{stake}</code>\n"
         f"{bloco_gemini}"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"💬 <i>{random.choice(fechamentos)}</i>"
@@ -2307,6 +2380,9 @@ def montar_mensagem_entrada(slot_key: str, confrontos: List[OddsMatch], hist: Hi
     vereditos = vereditos_gemini(verdes_raw, hist, forma, agenda if agenda is not None else odds_list)
     for i, (o, d, _extras) in enumerate(verdes_raw):
         veredito = vereditos[i] if i < len(vereditos) else ""
+        if "confiança: baixa" in veredito.lower():
+            log.info("[GEMINI VETO] %s x %s bloqueado | %s", o.home, o.away, veredito)
+            continue
         verdes.append((o, d.alvo, d.gap, veredito))
         blocos.append(_texto_entrada(
             _hora_jogo(o), o.home, o.away, d.alvo or "", d.odd, veredito))
@@ -2625,6 +2701,26 @@ def esc(t) -> str:
 def inicio_semana(d: datetime) -> str:
     return (d - timedelta(days=d.weekday())).strftime("%Y-%m-%d")
 
+PERIODOS_PLACAR = [
+    ("madrugada", "🌙 Madrugada (00h–05h)"),
+    ("manha", "☀️ Manhã (06h–11h)"),
+    ("tarde", "🌤️ Tarde (12h–17h)"),
+    ("noite", "🌃 Noite (18h–23h)"),
+]
+
+def _periodo_aposta(a: dict) -> str:
+    try:
+        h = int(str(a.get("bloco") or "0")[:2])
+    except ValueError:
+        h = 0
+    if 0 <= h < 6:
+        return "madrugada"
+    if 6 <= h < 12:
+        return "manha"
+    if 12 <= h < 18:
+        return "tarde"
+    return "noite"
+
 def texto_placar(apostas: Apostas, titulo: str, d1: str, d2: str, por_bloco: bool = False) -> str:
     lista = apostas.periodo(d1, d2)
     st = estatisticas(lista)
@@ -2645,13 +2741,13 @@ def texto_placar(apostas: Apostas, titulo: str, d1: str, d2: str, por_bloco: boo
         linhas.append(f"⏳ 𝗣𝗲𝗻𝗱𝗲𝗻𝘁𝗲𝘀: <code>{st['p']}</code>")
     if por_bloco:
         linhas.append("")
-        linhas.append("⏰ 𝗣𝗼𝗿 𝗿𝗼𝗱𝗮𝗱𝗮:")
-        for b in BLOCOS:
-            sb = estatisticas([a for a in lista if a["bloco"] == b])
+        linhas.append("⏰ 𝗣𝗼𝗿 𝗽𝗲𝗿𝗶́𝗼𝗱𝗼:")
+        for chave, rotulo in PERIODOS_PLACAR:
+            sb = estatisticas([a for a in lista if _periodo_aposta(a) == chave])
             if sb["g"] or sb["r"] or sb["p"] or sb["v"]:
-                linhas.append(f"• <code>{b}h</code>: {fmt_placar(sb)}" + (f" · {sb['p']} pend." if sb["p"] else ""))
+                linhas.append(f"• {rotulo}: {fmt_placar(sb)}" + (f" · {sb['p']} pend." if sb["p"] else ""))
     return "\n".join(linhas)
-
+  
 def texto_resumo_dia(apostas: Apostas, agora: Optional[datetime] = None) -> str:
     agora = agora or agora_cet()
     dia = agora.strftime("%Y-%m-%d")
@@ -3243,6 +3339,11 @@ def tarefas_agendadas(tg: "Telegram", apostas: Apostas, eventos: CacheSet, agora
     feitos = []
     if livro is not None and enviar_resumo_diario(tg, livro, forma, historico, agora):
         feitos.append("resumo_diario")
+      k_lic = f"licoes|{dia}"
+    if agora.hour == 0 and 10 <= agora.minute <= 25 and not eventos.has(k_lic):
+        if atualizar_licoes_diarias(tg):
+            eventos.add(k_lic)
+            feitos.append("licoes")
     ini_res = agora.replace(hour=HORA_RESUMO[0], minute=HORA_RESUMO[1], second=0, microsecond=0)
     k = f"resumo|{dia}"
     if ini_res <= agora <= agora.replace(hour=23, minute=59, second=59) and not eventos.has(k):
