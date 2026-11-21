@@ -2297,7 +2297,7 @@ def _texto_entrada(hora: str, home: str, away: str, alvo: str, odd: Optional[flo
         "Tudo na régua, zero emoção e foco no lucro! 🧠🔥",
         "Filtro cravado! Só confia no processo! 🙌⚡",
     ]
-   stake = "1.0 un 🔥" if "confiança: alta" in veredito.lower() else "0.5 un 🛡️"
+    stake = "1.0 un 🔥" if "confiança: alta" in veredito.lower() else "0.5 un 🛡️"
     bloco_gemini = f"🤖 𝗚𝗲𝗺𝗶𝗻𝗶: <i>{_html(veredito)}</i>\n" if veredito else ""
     return (
         f"{random.choice(titulos)}\n"
