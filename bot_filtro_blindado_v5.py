@@ -3339,7 +3339,7 @@ def tarefas_agendadas(tg: "Telegram", apostas: Apostas, eventos: CacheSet, agora
     feitos = []
     if livro is not None and enviar_resumo_diario(tg, livro, forma, historico, agora):
         feitos.append("resumo_diario")
-      k_lic = f"licoes|{dia}"
+    k_lic = f"licoes|{dia}"
     if agora.hour == 0 and 10 <= agora.minute <= 25 and not eventos.has(k_lic):
         if atualizar_licoes_diarias(tg):
             eventos.add(k_lic)
