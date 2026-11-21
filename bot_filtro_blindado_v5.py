@@ -1953,7 +1953,8 @@ def decidir_entrada(a: FormaJogador, b: FormaJogador,
         )
     return Decisao("bloqueado", ["PASSAR (Desnível insuficiente)"])
 
-def _stats_pontos_jogador(partidas: List[dict], agora: datetime) -> Tuple[int, float]:
+def _stats_pontos_jogador(partidas: List[dict], agora: datetime) -> Tuple[int, float, Optional[float]]:
+    """Retorna (qtd_jogos_recentes, media_sets_disputados, media_total_pontos) nas últimas 4h."""
     agora = _kickoff_local(agora)
     limite = agora - timedelta(hours=JANELA_SCORE_H)
     recentes = [
@@ -1961,52 +1962,78 @@ def _stats_pontos_jogador(partidas: List[dict], agora: datetime) -> Tuple[int, f
         if p.get("fim") and limite <= _kickoff_local(p["fim"]) <= agora
     ][-MAX_JOGOS_SCORE:]
     if not recentes:
-        return 0, 0.0
+        return 0, 0.0, None
     media_sets = sum(int(p["sets_favor"]) + int(p["sets_contra"]) for p in recentes) / len(recentes)
-    return len(recentes), media_sets
+    totais_pts = [
+        float(p["total_pontos"]) for p in recentes
+        if p.get("total_pontos") is not None and float(p["total_pontos"]) > 0
+    ]
+    media_pts = (sum(totais_pts) / len(totais_pts)) if totais_pts else None
+    return len(recentes), media_sets, media_pts
 
 def decidir_entrada_pontos(a: FormaJogador, b: FormaJogador,
                            om: Optional[OddsMatch],
                            agora: datetime,
                            anterior_a: bool = False,
                            anterior_b: bool = False) -> Decisao:
+    """Avalia Over/Under de pontos cruzando média de sets, pontos reais e equilíbrio/desnível."""
     if om is None or om.total_linha is None:
         return Decisao("bloqueado", ["PASSAR Pontos (Sem linha de pontos)"])
     if a.jogos_hoje < 1 or b.jogos_hoje < 1:
         return Decisao("indefinido", ["PASSAR Pontos (Sem dados do dia)"])
 
-    na, sets_a = _stats_pontos_jogador(a.partidas, agora)
-    nb, sets_b = _stats_pontos_jogador(b.partidas, agora)
+    na, sets_a, pts_a = _stats_pontos_jogador(a.partidas, agora)
+    nb, sets_b, pts_b = _stats_pontos_jogador(b.partidas, agora)
     if na < 2 or nb < 2:
         return Decisao("bloqueado", ["PASSAR Pontos (Amostra curta de jogos)"])
 
     media_sets_par = (sets_a + sets_b) / 2.0
     diff_forma = abs(a.score_forma - b.score_forma)
+    linha = float(om.total_linha)
 
+    media_pts_par: Optional[float] = None
+    if pts_a is not None and pts_b is not None:
+        media_pts_par = (pts_a + pts_b) / 2.0
+    elif pts_a is not None:
+        media_pts_par = pts_a
+    elif pts_b is not None:
+        media_pts_par = pts_b
+
+    # 1) Cenário OVER: jogo competitivo + tendência de sets longos / pontuação alta vs linha
+    pts_ok_over = (media_pts_par is None) or (media_pts_par >= linha - 1.5)
     if (
         om.odd_over and ODD_MIN_ALVO <= om.odd_over <= ODD_MAX_ALVO
         and media_sets_par >= 4.0
         and diff_forma <= 2.5
+        and pts_ok_over
         and not (anterior_a and anterior_b)
+        and not (a.desgaste_ultimo_jogo and b.desgaste_ultimo_jogo)
     ):
-        alvo_pts = f"Over {om.total_linha:g}"
-        gap_pts = round((media_sets_par - 3.5) * 3.0, 1)
+        alvo_pts = f"Over {linha:g}"
+        proj_bonus = ((media_pts_par - linha) * 0.25) if media_pts_par is not None else 0.0
+        gap_pts = round((media_sets_par - 3.5) * 3.0 + proj_bonus, 1)
+        pts_info = f" | média pts {media_pts_par:.1f} vs {linha:g}" if media_pts_par is not None else ""
         motivos = [
             f"✓ Mercado Pontos: <b>{alvo_pts} pts</b> (odd {om.odd_over:.2f})",
-            f"✓ Média sets recentes: {sets_a:.1f} vs {sets_b:.1f} (Δ forma {diff_forma:.1f})",
+            f"✓ Média sets: {sets_a:.1f} vs {sets_b:.1f} (Δ forma {diff_forma:.1f}{pts_info})",
         ]
         return Decisao("verde", motivos, alvo_pts, gap_pts, om.odd_over, a.score_forma, b.score_forma, 0.0)
 
+    # 2) Cenário UNDER: desnível claro + tendência de sets curtos / pontuação baixa vs linha
+    pts_ok_under = (media_pts_par is None) or (media_pts_par <= linha + 1.5)
     if (
         om.odd_under and ODD_MIN_ALVO <= om.odd_under <= ODD_MAX_ALVO
         and media_sets_par <= 3.5
         and diff_forma >= GAP_MIN
+        and pts_ok_under
     ):
-        alvo_pts = f"Under {om.total_linha:g}"
-        gap_pts = round(diff_forma, 1)
+        alvo_pts = f"Under {linha:g}"
+        proj_bonus = ((linha - media_pts_par) * 0.25) if media_pts_par is not None else 0.0
+        gap_pts = round(diff_forma + proj_bonus, 1)
+        pts_info = f" | média pts {media_pts_par:.1f} vs {linha:g}" if media_pts_par is not None else ""
         motivos = [
             f"✓ Mercado Pontos: <b>{alvo_pts} pts</b> (odd {om.odd_under:.2f})",
-            f"✓ Domínio seco esperado: média {sets_a:.1f}/{sets_b:.1f} sets (Δ forma {diff_forma:.1f})",
+            f"✓ Domínio seco esperado: média {sets_a:.1f}/{sets_b:.1f} sets (Δ forma {diff_forma:.1f}{pts_info})",
         ]
         return Decisao("verde", motivos, alvo_pts, gap_pts, om.odd_under, a.score_forma, b.score_forma, 0.0)
 
@@ -2947,6 +2974,10 @@ def _periodo_aposta(a: dict) -> str:
         return "tarde"
     return "noite"
 
+def _eh_aposta_pontos(a: dict) -> bool:
+    pick = (a.get("pick") or "").strip().lower()
+    return bool(re.match(r"^(over|under|mais de|menos de|pts|pontos)\b", pick))
+
 def texto_placar(apostas: Apostas, titulo: str, d1: str, d2: str, por_bloco: bool = False) -> str:
     lista = apostas.periodo(d1, d2)
     st = estatisticas(lista)
@@ -2956,10 +2987,17 @@ def texto_placar(apostas: Apostas, titulo: str, d1: str, d2: str, por_bloco: boo
             f"━━━━━━━━━━━━━━━━━━\n"
             f"😴 Nenhuma entrada no período ainda. Seguimos na disciplina!"
         )
+    vencedores = [a for a in lista if not _eh_aposta_pontos(a)]
+    pontos = [a for a in lista if _eh_aposta_pontos(a)]
+    st_v = estatisticas(vencedores)
+    st_p = estatisticas(pontos)
+
     linhas = [
         f"📊🔥 <b>{titulo}</b>",
         "━━━━━━━━━━━━━━━━━━",
-        f"🏆 𝗥𝗲𝘀𝘂𝗹𝘁𝗮𝗱𝗼: <b>{fmt_placar(st)}</b>",
+        f"🏆 𝗚𝗲𝗿𝗮𝗹: <b>{fmt_placar(st)}</b>",
+        f"👑 𝗩𝗲𝗻𝗰𝗲𝗱𝗼𝗿: <b>{fmt_placar(st_v)}</b>" + (f" · ⏳ {st_v['p']} pend." if st_v["p"] else ""),
+        f"📊 𝗣𝗼𝗻𝘁𝗼𝘀: <b>{fmt_placar(st_p)}</b>" + (f" · ⏳ {st_p['p']} pend." if st_p["p"] else ""),
     ]
     if st["v"]:
         linhas.append(f"⚪ 𝗔𝗻𝘂𝗹𝗮𝗱𝗮𝘀: <code>{st['v']}</code>")
@@ -2969,9 +3007,16 @@ def texto_placar(apostas: Apostas, titulo: str, d1: str, d2: str, por_bloco: boo
         linhas.append("")
         linhas.append("⏰ 𝗣𝗼𝗿 𝗽𝗲𝗿𝗶́𝗼𝗱𝗼:")
         for chave, rotulo in PERIODOS_PLACAR:
-            sb = estatisticas([a for a in lista if _periodo_aposta(a) == chave])
+            sub = [a for a in lista if _periodo_aposta(a) == chave]
+            sb = estatisticas(sub)
             if sb["g"] or sb["r"] or sb["p"] or sb["v"]:
-                linhas.append(f"• {rotulo}: {fmt_placar(sb)}" + (f" · {sb['p']} pend." if sb["p"] else ""))
+                sb_v = estatisticas([a for a in sub if not _eh_aposta_pontos(a)])
+                sb_p = estatisticas([a for a in sub if _eh_aposta_pontos(a)])
+                linhas.append(
+                    f"• {rotulo}: {fmt_placar(sb)}"
+                    f" <i>(V: {sb_v['g']}✅/{sb_v['r']}❌ · P: {sb_p['g']}✅/{sb_p['r']}❌)</i>"
+                    + (f" · {sb['p']} pend." if sb["p"] else "")
+                )
     return "\n".join(linhas)
 
 def texto_resumo_dia(apostas: Apostas, agora: Optional[datetime] = None) -> str:
@@ -2979,10 +3024,14 @@ def texto_resumo_dia(apostas: Apostas, agora: Optional[datetime] = None) -> str:
     dia = agora.strftime("%Y-%m-%d")
     mes_ini = agora.strftime("%Y-%m-01")
     corpo = texto_placar(apostas, f"𝗥𝗘𝗦𝗨𝗠𝗢 𝗗𝗢 𝗗𝗜𝗔 {agora.strftime('%d/%m')}", dia, dia, por_bloco=True)
-    mes = estatisticas(apostas.periodo(mes_ini, dia))
+    lista_mes = apostas.periodo(mes_ini, dia)
+    mes = estatisticas(lista_mes)
+    mes_v = estatisticas([a for a in lista_mes if not _eh_aposta_pontos(a)])
+    mes_p = estatisticas([a for a in lista_mes if _eh_aposta_pontos(a)])
     return (
         f"{corpo}\n\n"
         f"📅 𝗡𝗼 𝗺𝗲̂𝘀: <b>{fmt_placar(mes)}</b>\n"
+        f"👑 𝗠𝗲̂𝘀 𝗩𝗲𝗻𝗰𝗲𝗱𝗼𝗿: <b>{fmt_placar(mes_v)}</b> | 📊 𝗠𝗲̂𝘀 𝗣𝗼𝗻𝘁𝗼𝘀: <b>{fmt_placar(mes_p)}</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"💬 <i>“{frase_motivacional()}”</i>\n\n"
         f"{AVISO_RESPONSAVEL}"
