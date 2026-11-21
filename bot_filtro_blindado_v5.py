@@ -2310,7 +2310,6 @@ def _texto_entrada(hora: str, home: str, away: str, alvo: str, odd: Optional[flo
         f"━━━━━━━━━━━━━━━━━━\n"
         f"💬 <i>{_html(frase_dinamica_gemini(f'Entrada em {nome_exibicao(alvo)} @ {odd_txt}. {veredito}', random.choice(fechamentos)))}</i>"
     )
-    )
 
 def _texto_sem_entrada(hora: str) -> str:
     frases = [
